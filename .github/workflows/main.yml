@@ -1,0 +1,31 @@
+﻿name: oPayque CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, feature/* ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Pull the code onto the GitHub Runner
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Set up Java 17 (Matching your pom.xml)
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # 3. Run the Maven Build + Checkstyle + PMD + Tests
+      # We use 'verify' because it runs both unit tests and checkstyle/pmd plugins
+      - name: Build and Verify with Maven
+        run: mvn --batch-mode --update-snapshots verify
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
