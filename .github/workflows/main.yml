@@ -1,4 +1,4 @@
-﻿name: oPayque CI/CD Pipeline
+name: oPayque CI/CD Pipeline
 
 on:
   push:
