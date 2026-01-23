@@ -8,3 +8,4 @@ spring:
     database-platform: org.hibernate.dialect.H2Dialect
   liquibase:
     enabled: true # Let the Robot test if your changelogs are valid!
+    change-log: classpath:db/changelog/db.changelog-master.xml
