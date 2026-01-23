@@ -1,3 +1,15 @@
 spring:
   application:
     name: oPayque-API
+  datasource:
+    url: jdbc:postgresql://localhost:5432/opayque_db
+    username: madavan # Who might this be?
+    password: ${DB_PASSWORD} # This uses the environment variable on my machine
+  jpa:
+    hibernate:
+      ddl-auto: validate # let Liquibase handle the schema
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.xml
