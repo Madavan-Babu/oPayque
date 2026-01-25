@@ -1,35 +1,42 @@
 package com.opayque.api.identity.service;
 
-import com.opayque.api.identity.dto.RegisterRequest;
-import com.opayque.api.identity.dto.RegisterResponse;
+import com.opayque.api.identity.dto.LoginRequest;
+import com.opayque.api.identity.dto.LoginResponse;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
-import com.opayque.api.infrastructure.exception.UserAlreadyExistsException;
+import com.opayque.api.infrastructure.exception.UserNotFoundException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 
-import java.time.LocalDateTime;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
+import com.opayque.api.identity.dto.RegisterRequest;
+import com.opayque.api.identity.dto.RegisterResponse;
+import com.opayque.api.infrastructure.exception.UserAlreadyExistsException;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
-/**
- * Epic 1: Identity & Access Management - Unit Testing
- * * This test suite validates the core business logic of the AuthService in isolation.
- * By mocking external dependencies (Repository and PasswordEncoder), we ensure
- * the "Opaque" logic is correct without requiring a live database or security context.
- * * Verification Focus:
- * - Password Security: Ensuring BCrypt hashing is triggered.
- * - Role Integrity: Guaranteeing default role assignment.
- * - Fault Tolerance: Verifying exception handling for duplicate identities, including soft-deleted users.
- */
+import java.time.LocalDateTime;
+
+/// Epic 1: Identity & Access Management - Unit Testing
+/// * This test suite validates the core business logic of the AuthService in isolation.
+/// By mocking external dependencies (Repository and PasswordEncoder), we ensure
+/// the "Opaque" logic is correct without requiring a live database or security context.
+/// * Verification Focus:
+/// - Password Security: Ensuring BCrypt hashing is triggered.
+/// - Role Integrity: Guaranteeing default role assignment.
+/// - Fault Tolerance: Verifying exception handling for duplicate identities, including soft-deleted users.
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
 
@@ -38,6 +45,12 @@ class AuthServiceTest {
 
     @Mock
     private PasswordEncoder passwordEncoder;
+
+    @Mock
+    private JwtService jwtService;
+
+    @Mock
+    private AuthenticationManager authenticationManager;
 
     @InjectMocks
     private AuthService authService;
@@ -141,5 +154,81 @@ class AuthServiceTest {
         assertNotNull(response);
         assertEquals(email, response.email());
         verify(userRepository, times(1)).save(any());
+    }
+
+    /**
+     * Test Case: Successful Authentication
+     * Verifies that valid credentials result in the generation and return of a
+     * stateless JWT.
+     */
+    @Test
+    @DisplayName("Unit: Should return JWT when login credentials are valid")
+    void shouldLoginAndReturnToken() {
+        // Arrange: Setup request and expected outcome
+        LoginRequest request = new LoginRequest("dev@opayque.com", "password123");
+        String expectedToken = "mocked.jwt.token";
+        User user = User.builder()
+                .email(request.email())
+                .role(com.opayque.api.identity.entity.Role.CUSTOMER)
+                .build();
+
+        // Mock Spring Security's successful authentication process
+        Authentication mockAuth = mock(Authentication.class);
+        when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
+                .thenReturn(mockAuth);
+
+        // Mock the retrieval of the authenticated user and subsequent token generation
+        when(userRepository.findByEmail(request.email())).thenReturn(Optional.of(user));
+        when(jwtService.generateToken(user.getEmail(), user.getRole().name())).thenReturn(expectedToken);
+
+        // Act: Perform the login operation
+        LoginResponse response = authService.login(request);
+
+        // Assert: Verify the response contains the Opaque JWT
+        assertNotNull(response);
+        assertEquals(expectedToken, response.token());
+
+        // Ensure token generation was triggered exactly once
+        verify(jwtService, times(1)).generateToken(anyString(), anyString());
+    }
+
+    /**
+     * Test Case: Credential Failure
+     * Ensures that the system rejects invalid login attempts and prevents token
+     * issuance for unauthenticated requests.
+     */
+    @Test
+    @DisplayName("Unit: Should throw BadCredentialsException when password/email is wrong")
+    void shouldThrowOnInvalidCredentials() {
+        // Arrange
+        LoginRequest request = new LoginRequest("wrong@opayque.com", "wrong-pass");
+
+        // Simulate Spring Security's failure when credentials do not match the ledger
+        when(authenticationManager.authenticate(any()))
+                .thenThrow(new BadCredentialsException("Invalid credentials"));
+
+        // Act & Assert: Confirm exception propagation
+        assertThrows(BadCredentialsException.class, () -> authService.login(request));
+
+        // Security Audit: Verify we NEVER generate a token for a failed login
+        verify(jwtService, never()).generateToken(anyString(), anyString());
+    }
+
+    /**
+     * Test Case: Identity Desynchronization
+     * Verifies system resilience in the edge case where authentication passes
+     * but the user record cannot be found in the database (e.g., race condition
+     * during account deletion).
+     */
+    @Test
+    @DisplayName("Unit: Should throw exception if user disappears after authentication")
+    void shouldThrowNotFoundIfUserMissingAfterAuth() {
+        // Arrange: Auth passes, but the ledger search returns empty
+        LoginRequest request = new LoginRequest("ghost@opayque.com", "pass");
+        when(authenticationManager.authenticate(any())).thenReturn(mock(Authentication.class));
+        when(userRepository.findByEmail(any())).thenReturn(Optional.empty());
+
+        // Act & Assert: Expect custom infrastructure exception
+        assertThrows(UserNotFoundException.class, () -> authService.login(request));
     }
 }

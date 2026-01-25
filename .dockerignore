@@ -1,0 +1,20 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Build
+target/
+build/
+.gradle/
+
+# Git
+.git
+.gitignore
+
+# OS Junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

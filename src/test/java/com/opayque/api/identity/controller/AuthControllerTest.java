@@ -14,12 +14,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/**
- * Epic 1: Identity & Access Management - Integration Testing
- * * This suite performs full-stack integration testing of the {@link AuthController}.
- * It verifies the end-to-end flow of user registration, including security filters,
- * data validation, and database persistence within a transactional test context.
- */
+/// Epic 1: Identity & Access Management - Integration Testing
+/// * This suite performs full-stack integration testing of the [AuthController].
+/// It verifies the end-to-end flow of user registration, including security filters,
+/// data validation, and database persistence within a transactional test context.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")

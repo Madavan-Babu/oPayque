@@ -1,14 +1,18 @@
 package com.opayque.api.identity.service;
 
-
+import com.opayque.api.identity.dto.LoginRequest;
+import com.opayque.api.identity.dto.LoginResponse;
 import com.opayque.api.identity.dto.RegisterRequest;
 import com.opayque.api.identity.dto.RegisterResponse;
 import com.opayque.api.identity.entity.Role;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.infrastructure.exception.UserAlreadyExistsException;
+import com.opayque.api.infrastructure.exception.UserNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +30,8 @@ public class AuthService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final AuthenticationManager authenticationManager;
+    private final JwtService jwtService;
 
     /**
      * Registers a new user within the oPayque ecosystem.
@@ -68,5 +74,27 @@ public class AuthService {
                 savedUser.getFullName(),
                 savedUser.getRole().name()
         );
+    }
+
+    /**
+     * Authenticates user credentials and returns a signed JWT.
+     */
+    public LoginResponse login(LoginRequest request) {
+        log.info("Attempting login for user: {}", request.email());
+
+        // 1. Let Spring Security handle the credential check
+        authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(request.email(), request.password())
+        );
+
+        // 2. If we reached here, authentication was successful. Retrieve user to get roles.
+        User user = userRepository.findByEmail(request.email())
+                .orElseThrow(() -> new UserNotFoundException("User not found after authentication"));
+
+        // 3. Generate the "Key Card"
+        String jwtToken = jwtService.generateToken(user.getEmail(), user.getRole().name());
+
+        log.info("Login successful for user: {}", request.email());
+        return new LoginResponse(jwtToken);
     }
 }

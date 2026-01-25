@@ -3,3 +3,11 @@ spring:
     active: dev # Default for local coding
   application:
     name: oPayque-API
+
+# Custom properties
+application:
+  security:
+    jwt:
+      # Use a 64-character hex string in production! (REMEMBER TO CHANGE THIS!)
+      secret-key: ${JWT_SECRET_KEY:v3ry-s3cr3t-b4nk-gr4d3-k3y-th4t-sh0uld-b3-v3ry-l0ng}
+      expiration: 86400000 # 24 hours in milliseconds
