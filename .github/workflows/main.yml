@@ -10,12 +10,27 @@ jobs:
   build-and-verify:
     runs-on: ubuntu-latest
 
+    # 1. Define the Database Service (The Fix)
+    # This spins up a real PostgreSQL instance inside the GitHub Runner.
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: opayque_test
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
-      # 1. Pull the code onto the GitHub Runner
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Set up Java 17 (Matching your pom.xml)
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -23,9 +38,13 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      # 3. Run the Maven Build + Checkstyle + PMD + Tests
-      # We use 'verify' because it runs both unit tests and checkstyle/pmd plugins
       - name: Build and Verify with Maven
         run: mvn --batch-mode --update-snapshots verify
         env:
+          # 2. Force Application to use the Service Container
+          # These overrides take precedence over application.yml defaults.
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/opayque_test
+          SPRING_DATASOURCE_USERNAME: ci_user
+          SPRING_DATASOURCE_PASSWORD: ci_password
+          # Keep your existing secret for production builds if needed later
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
