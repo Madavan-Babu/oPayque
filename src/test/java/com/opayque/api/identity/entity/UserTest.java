@@ -36,4 +36,23 @@ class UserTest {
 
         assertTrue(user.isEnabled(), "Active user must return true for isEnabled()");
     }
+
+
+    @Test
+    @DisplayName("Unit: Should prefix authorities with ROLE_ for Spring Security compatibility")
+    void shouldPrefixAuthoritiesWithRole() {
+        // Arrange
+        User user = User.builder()
+                .role(Role.ADMIN)
+                .build();
+
+        // Act
+        var authorities = user.getAuthorities();
+
+        // Assert
+        boolean hasAdminRole = authorities.stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+
+        assertTrue(hasAdminRole, "Authorities must include 'ROLE_ADMIN' to satisfy Spring's RBAC requirements.");
+    }
 }

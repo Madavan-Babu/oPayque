@@ -8,6 +8,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authorization.AuthorizationDeniedException;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -28,15 +30,18 @@ public class GlobalExceptionHandler {
     /// with an email that is already persisted in the ledger.
     ///
     /// @param ex The custom UserAlreadyExistsException.
-    /// @return A 409 Conflict response with the specific error message.
+    /// @param request The web request context.
+    /// @return A 409 Conflict response with a standardized ErrorResponse.
     @ExceptionHandler(UserAlreadyExistsException.class)
-    public ResponseEntity<String> handleUserExists(UserAlreadyExistsException ex) {
+    public ResponseEntity<ErrorResponse> handleUserExists(UserAlreadyExistsException ex, WebRequest request) {
         log.debug("Conflict detected: Registration attempt with existing email. Reason: {}", ex.getMessage());
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
     /// Handles Bean Validation failures triggered by the `@Valid` annotation on
     /// incoming DTO payloads.
+    ///
+    /// *Note: This remains distinct as it returns a Map of fields, not a single message.*
     ///
     /// @param ex Exception thrown when argument validation fails.
     /// @return A 400 Bad Request containing a map of field names and their corresponding error messages.
@@ -52,27 +57,16 @@ public class GlobalExceptionHandler {
 
     /// Handles instances where a requested user identity cannot be found during login or audit lookups.
     ///
-    /// Transforms the exception into a standardized {@link ErrorResponse} for consistent client-side handling.
-    ///
     /// @param ex The UserNotFoundException thrown by the service layer.
     /// @param request The current web request used to extract the URI path.
     /// @return A 404 Not Found response containing detailed error metadata.
     @ExceptionHandler(UserNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleUserNotFoundException(UserNotFoundException ex, WebRequest request) {
         log.error("Resource not found: {}", ex.getMessage());
-        ErrorResponse error = new ErrorResponse(
-                HttpStatus.NOT_FOUND.value(),
-                "NOT_FOUND",
-                ex.getMessage(),
-                request.getDescription(false).replace("uri=", "")
-        );
-        return new ResponseEntity<>(error, HttpStatus.NOT_FOUND);
+        return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), request);
     }
 
     /// Intercepts Spring Security's authentication failures to prevent unauthorized entry.
-    ///
-    /// This handler provides a standardized 401 response while ensuring internal security
-    /// logs capture the context of the failed attempt for auditing purposes.
     ///
     /// @param ex The BadCredentialsException thrown by the AuthenticationManager.
     /// @param request The current web request.
@@ -83,13 +77,25 @@ public class GlobalExceptionHandler {
                 request.getDescription(false).replace("uri=", ""),
                 ex.getMessage());
 
-        ErrorResponse error = new ErrorResponse(
-                HttpStatus.UNAUTHORIZED.value(),
+        return buildErrorResponse(
+                HttpStatus.UNAUTHORIZED,
                 "INVALID_CREDENTIALS",
                 "Invalid email or password",
-                request.getDescription(false).replace("uri=", "")
+                request
         );
-        return new ResponseEntity<>(error, HttpStatus.UNAUTHORIZED);
+    }
+
+    /// Security Gate Handler
+    /// Catches generic 403 errors (AccessDenied) and Spring Security 6 specific errors (AuthorizationDenied).
+    /// This prevents the system from leaking a 500 Internal Server Error when a user is simply blocked.
+    @ExceptionHandler({AccessDeniedException.class, AuthorizationDeniedException.class})
+    public ResponseEntity<ErrorResponse> handleAccessDenied(Exception ex, WebRequest request) {
+        log.warn("Security Gate Blocked: {} - {}", request.getDescription(false), ex.getMessage());
+        return buildErrorResponse(
+                HttpStatus.FORBIDDEN,
+                "Access Denied: You do not have permission to view this resource",
+                request
+        );
     }
 
     /// Fallback handler for unexpected internal server errors.
@@ -105,12 +111,42 @@ public class GlobalExceptionHandler {
         log.error("CRITICAL: Unexpected system failure encountered on path: {}",
                 request.getDescription(false).replace("uri=", ""), ex);
 
-        ErrorResponse error = new ErrorResponse(
-                HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                "INTERNAL_SERVER_ERROR",
+        return buildErrorResponse(
+                HttpStatus.INTERNAL_SERVER_ERROR,
                 "An internal service error occurred.",
+                request
+        );
+    }
+
+    // ==================================================================================
+    //                                 PRIVATE HELPERS
+    // ==================================================================================
+
+    /// Convenience Helper: Uses the HTTP Status Name as the Error Code.
+    /// Example: 404 -> "NOT_FOUND"
+    private ResponseEntity<ErrorResponse> buildErrorResponse(
+            HttpStatus status,
+            String message,
+            WebRequest request
+    ) {
+        return buildErrorResponse(status, status.name(), message, request);
+    }
+
+    /// Master Error Factory
+    /// Allows specifying a custom 'code' (e.g., "INVALID_CREDENTIALS") different from the Status Name.
+    private ResponseEntity<ErrorResponse> buildErrorResponse(
+            HttpStatus status,
+            String code,
+            String message,
+            WebRequest request
+    ) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                status.value(),
+                code,
+                message,
                 request.getDescription(false).replace("uri=", "")
         );
-        return new ResponseEntity<>(error, HttpStatus.INTERNAL_SERVER_ERROR);
+
+        return new ResponseEntity<>(errorResponse, status);
     }
 }

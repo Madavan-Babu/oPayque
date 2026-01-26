@@ -81,11 +81,11 @@ class SecurityConfigIntegrationTest {
     /// Validates that the "Opaque" security model defaults to a "Deny-All" policy
     /// for internal API paths when no valid credential is provided.
     @Test
-    @DisplayName("Security: Protected endpoints should return 403 when no token is present")
+    @DisplayName("Security: Protected endpoints should return 401 when no token is present")
     void shouldBlockAccessToProtectedEndpoints() throws Exception {
         // Attempting to access a hypothetical protected endpoint without a Bearer token
         mockMvc.perform(get("/api/v1/demo/me"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     /// Confirms that the end-to-end security flow allows access once a valid

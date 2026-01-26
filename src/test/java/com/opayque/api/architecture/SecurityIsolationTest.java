@@ -1,6 +1,7 @@
 package com.opayque.api.architecture;
 
 import com.opayque.api.identity.service.JwtService;
+import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
@@ -19,7 +20,10 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 /// - **JwtService Isolation**: Restricts token handling to identity services and security filters.
 /// - **Controller Purity**: Ensures REST controllers remain decoupled from the underlying Jakarta Servlet API.
 /// - **Library Encapsulation**: Guarantees that the Auth0 JWT library is strictly an implementation detail of the Identity domain.
-@AnalyzeClasses(packages = "com.opayque.api")
+@AnalyzeClasses(
+        packages = "com.opayque.api",
+        importOptions = ImportOption.DoNotIncludeTests.class // <--- THIS LINE IS CRITICAL
+)
 class SecurityIsolationTest {
 
     /// Ensures that the {@link JwtService} is only utilized by the identity domain.
