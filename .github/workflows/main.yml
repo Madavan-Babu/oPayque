@@ -10,8 +10,6 @@ jobs:
   build-and-verify:
     runs-on: ubuntu-latest
 
-    # 1. Define the Database Service (The Fix)
-    # This spins up a real PostgreSQL instance inside the GitHub Runner.
     services:
       postgres:
         image: postgres:15-alpine
@@ -41,10 +39,16 @@ jobs:
       - name: Build and Verify with Maven
         run: mvn --batch-mode --update-snapshots verify
         env:
-          # 2. Force Application to use the Service Container
-          # These overrides take precedence over application.yml defaults.
+          # --- DATABASE CONFIGURATION (CI OVERRIDES) ---
+          # 1. Connection Details
           SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/opayque_test
           SPRING_DATASOURCE_USERNAME: ci_user
           SPRING_DATASOURCE_PASSWORD: ci_password
-          # Keep your existing secret for production builds if needed later
+
+          # 2. Driver & Dialect (CRITICAL FIX)
+          # These overrides prevent Spring from using the H2 settings in application-test.yaml
+          SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+          SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
+
+          # 3. Secrets
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
