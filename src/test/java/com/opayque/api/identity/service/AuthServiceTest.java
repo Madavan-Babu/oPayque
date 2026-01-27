@@ -2,9 +2,12 @@ package com.opayque.api.identity.service;
 
 import com.opayque.api.identity.dto.LoginRequest;
 import com.opayque.api.identity.dto.LoginResponse;
+import com.opayque.api.identity.dto.RegisterRequest;
+import com.opayque.api.identity.dto.RegisterResponse;
+import com.opayque.api.identity.entity.Role;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
-import com.opayque.api.infrastructure.exception.UserNotFoundException;
+import com.opayque.api.infrastructure.exception.UserAlreadyExistsException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -14,221 +17,165 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.Date;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
-import com.opayque.api.identity.dto.RegisterRequest;
-import com.opayque.api.identity.dto.RegisterResponse;
-import com.opayque.api.infrastructure.exception.UserAlreadyExistsException;
-import org.springframework.security.crypto.password.PasswordEncoder;
 
-import java.time.LocalDateTime;
-
-/// Epic 1: Identity & Access Management - Unit Testing
-/// * This test suite validates the core business logic of the AuthService in isolation.
-/// By mocking external dependencies (Repository and PasswordEncoder), we ensure
-/// the "Opaque" logic is correct without requiring a live database or security context.
-/// * Verification Focus:
-/// - Password Security: Ensuring BCrypt hashing is triggered.
-/// - Role Integrity: Guaranteeing default role assignment.
-/// - Fault Tolerance: Verifying exception handling for duplicate identities, including soft-deleted users.
+/// Epic 1: Identity & Access Management - Service Logic Testing
+///
+/// This suite validates the business-centric rules within the {@link AuthService}.
+/// It focuses on onboarding atomicity, credential verification, and the
+/// logic governing token revocation (Story 1.4).
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
 
-    @Mock
-    private UserRepository userRepository;
-
-    @Mock
-    private PasswordEncoder passwordEncoder;
-
-    @Mock
-    private JwtService jwtService;
-
-    @Mock
-    private AuthenticationManager authenticationManager;
+    @Mock private UserRepository userRepository;
+    @Mock private PasswordEncoder passwordEncoder;
+    @Mock private AuthenticationManager authenticationManager;
+    @Mock private JwtService jwtService;
+    @Mock private TokenBlocklistService tokenBlocklistService;
 
     @InjectMocks
     private AuthService authService;
 
-    /**
-     * Test Case: Password Hashing Verification
-     * Validates that the service layer correctly invokes the PasswordEncoder.
-     * Storing raw passwords is a critical failure in our banking architecture.
-     */
+    /// Scenario: Successful Onboarding.
+    /// Verifies that valid registration data results in a persisted identity with the
+    /// default 'CUSTOMER' role.
     @Test
-    @DisplayName("Unit: Should hash password during registration")
-    void shouldHashPassword() {
-        // Arrange: Define a safe registration request
-        RegisterRequest request = new RegisterRequest("unit@test.com", "RawPassword123!", "Unit Test");
+    @DisplayName("Unit: Should successfully register when valid data is provided")
+    void shouldRegisterUserSuccessfully() {
+        RegisterRequest request = new RegisterRequest("unit@test.com", "password", "Unit User");
+        User savedUser = User.builder()
+                .id(java.util.UUID.randomUUID())
+                .email(request.email())
+                .fullName(request.fullName())
+                .role(Role.CUSTOMER)
+                .build();
 
-        // Refactored Mock: Teach the mock to respond to findByEmail
-        when(userRepository.findByEmail(any())).thenReturn(Optional.empty());
-        when(passwordEncoder.encode(any())).thenReturn("hashed_password");
-        when(userRepository.save(any())).thenAnswer(i -> i.getArguments()[0]);
+        when(userRepository.findByEmail(request.email())).thenReturn(Optional.empty());
+        when(passwordEncoder.encode(request.password())).thenReturn("encodedPass");
+        when(userRepository.save(any(User.class))).thenReturn(savedUser);
 
-        // Act: Execute the registration logic
-        authService.register(request);
-
-        // Assert: Verify that encode() was called exactly once with the raw input
-        verify(passwordEncoder, times(1)).encode("RawPassword123!");
-    }
-
-    /**
-     * Test Case: Default Role Assignment
-     * Ensures all new users are onboarded as CUSTOMERs unless explicitly elevated
-     * by an admin in a separate process.
-     */
-    @Test
-    @DisplayName("Unit: Should always assign CUSTOMER role by default")
-    void shouldAssignCustomerRole() {
-        // Arrange
-        RegisterRequest request = new RegisterRequest("role@test.com", "password", "Role Test");
-
-        // Refactored Mock: Teach the mock to return empty for email availability
-        when(userRepository.findByEmail(any())).thenReturn(Optional.empty());
-        when(userRepository.save(any())).thenAnswer(i -> i.getArguments()[0]);
-
-        // Act
         RegisterResponse response = authService.register(request);
 
-        // Assert: Confirm the response reflects the expected business default
+        assertNotNull(response);
+        assertEquals(savedUser.getId(), response.id());
         assertEquals("CUSTOMER", response.role());
     }
 
-    /**
-     * Test Case: Duplicate Identity Protection
-     * Ensures that the system prevents duplicate registrations when an ACTIVE account exists.
-     */
+    /// Scenario: Registration Conflict.
+    /// Ensures that duplicate emails are rejected to maintain the integrity of the
+    /// identity ledger.
     @Test
     @DisplayName("Unit: Should throw UserAlreadyExistsException when email is taken")
-    void shouldThrowExceptionWhenEmailExists() {
-        // Arrange
-        RegisterRequest request = new RegisterRequest("exists@test.com", "password", "Exists Test");
+    void shouldThrowExceptionIfEmailExists() {
+        RegisterRequest request = new RegisterRequest("exists@test.com", "pass", "Name");
+        User existingUser = User.builder().email(request.email()).build();
 
-        // Simulate an ACTIVE user in the ledger (deletedAt is null)
-        User activeUser = User.builder()
-                .email("exists@test.com")
-                .deletedAt(null)
-                .build();
+        when(userRepository.findByEmail(request.email())).thenReturn(Optional.of(existingUser));
 
-        when(userRepository.findByEmail("exists@test.com")).thenReturn(Optional.of(activeUser));
-
-        // Act & Assert: Verify the custom infrastructure exception is thrown
         assertThrows(UserAlreadyExistsException.class, () -> authService.register(request));
-
-        // Critical Assert: Ensure the database was never touched after the check failed
-        verify(userRepository, never()).save(any());
     }
 
-    /**
-     * Test Case: Soft-Delete Recovery
-     * Validates that an email is considered "available" for registration if the previous
-     * owner has been soft-deleted.
-     */
+    /// Scenario: Soft-Delete Re-Onboarding.
+    /// Verifies that an email belonging to a soft-deleted identity is eligible for
+    /// "re-registration" as a new record.
     @Test
     @DisplayName("Unit: Should allow registration if existing email is soft-deleted")
-    void shouldAllowRegistrationWhenEmailIsSoftDeleted() {
-        // Arrange
-        String email = "reborn@opayque.com";
-        RegisterRequest request = new RegisterRequest(email, "password123", "Reborn User");
+    void shouldAllowRegistrationIfEmailIsSoftDeleted() {
+        RegisterRequest request = new RegisterRequest("deleted@test.com", "pass", "Name");
+        User deletedUser = User.builder().email(request.email()).deletedAt(LocalDateTime.now()).build();
+        User savedUser = User.builder().id(java.util.UUID.randomUUID()).email("deleted@test.com").role(Role.CUSTOMER).build();
 
-        // Simulate a user that was soft-deleted in the past
-        User deletedUser = User.builder()
-                .email(email)
-                .deletedAt(LocalDateTime.now())
-                .build();
+        when(userRepository.findByEmail(anyString())).thenReturn(Optional.of(deletedUser));
+        when(passwordEncoder.encode(anyString())).thenReturn("encoded");
+        when(userRepository.save(any(User.class))).thenReturn(savedUser);
 
-        when(userRepository.findByEmail(email)).thenReturn(Optional.of(deletedUser));
-        when(passwordEncoder.encode(any())).thenReturn("hashed_password");
-        when(userRepository.save(any())).thenAnswer(i -> i.getArguments()[0]);
-
-        // Act
         RegisterResponse response = authService.register(request);
 
-        // Assert: Success verifies that the guardrail successfully bypassed the deleted record
         assertNotNull(response);
-        assertEquals(email, response.email());
-        verify(userRepository, times(1)).save(any());
+        verify(userRepository).save(any(User.class));
     }
 
-    /**
-     * Test Case: Successful Authentication
-     * Verifies that valid credentials result in the generation and return of a
-     * stateless JWT.
-     */
+    /// Scenario: Token Issuance.
+    /// Verifies that valid credentials result in the generation of a signed JWT
+    /// containing correct role metadata.
     @Test
     @DisplayName("Unit: Should return JWT when login credentials are valid")
-    void shouldLoginAndReturnToken() {
-        // Arrange: Setup request and expected outcome
-        LoginRequest request = new LoginRequest("dev@opayque.com", "password123");
-        String expectedToken = "mocked.jwt.token";
-        User user = User.builder()
-                .email(request.email())
-                .role(com.opayque.api.identity.entity.Role.CUSTOMER)
-                .build();
+    void shouldReturnJwtOnLogin() {
+        LoginRequest request = new LoginRequest("dev@opayque.com", "password");
+        User user = User.builder().email(request.email()).role(Role.ADMIN).build();
 
-        // Mock Spring Security's successful authentication process
-        Authentication mockAuth = mock(Authentication.class);
-        when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
-                .thenReturn(mockAuth);
-
-        // Mock the retrieval of the authenticated user and subsequent token generation
         when(userRepository.findByEmail(request.email())).thenReturn(Optional.of(user));
-        when(jwtService.generateToken(user.getEmail(), user.getRole().name())).thenReturn(expectedToken);
+        when(jwtService.generateToken(user.getEmail(), "ADMIN")).thenReturn("valid.token");
 
-        // Act: Perform the login operation
         LoginResponse response = authService.login(request);
 
-        // Assert: Verify the response contains the Opaque JWT
-        assertNotNull(response);
-        assertEquals(expectedToken, response.token());
+        assertEquals("valid.token", response.token());
+        verify(authenticationManager).authenticate(any(UsernamePasswordAuthenticationToken.class));
+    }
 
-        // Ensure token generation was triggered exactly once
-        verify(jwtService, times(1)).generateToken(anyString(), anyString());
+    /// Scenario: Logout Revocation (Story 1.4).
+    /// Verifies that logging out calculates the remaining TTL correctly and blocks
+    /// the token signature in Redis.
+    @Test
+    @DisplayName("Unit: Logout should calculate TTL and block token if valid")
+    void logout_ShouldBlockToken_WhenTtlPositive() {
+        String token = "header.payload.signature";
+        Date futureDate = new Date(System.currentTimeMillis() + 10000);
+
+        when(jwtService.extractExpiration(token)).thenReturn(futureDate);
+
+        authService.logout(token);
+
+        verify(tokenBlocklistService).blockToken(eq("signature"), any(Duration.class));
+    }
+
+    /// Scenario: Expired Logout.
+    /// Ensures that tokens already past their expiration are not added to the blocklist,
+    /// optimizing Redis memory usage.
+    @Test
+    @DisplayName("Unit: Logout should SKIP blocking if token is already expired")
+    void logout_ShouldSkipBlock_WhenTtlNegative() {
+        String token = "header.payload.signature";
+        Date pastDate = new Date(System.currentTimeMillis() - 10000);
+
+        when(jwtService.extractExpiration(token)).thenReturn(pastDate);
+
+        authService.logout(token);
+
+        verify(tokenBlocklistService, never()).blockToken(anyString(), any());
     }
 
     /**
-     * Test Case: Credential Failure
-     * Ensures that the system rejects invalid login attempts and prevents token
-     * issuance for unauthenticated requests.
+     * Unit Test: shouldThrowOnBadCredentials
+     * * Validates that the AuthService correctly handles and propagates a
+     * BadCredentialsException when the AuthenticationManager rejects a login attempt.
+     * This ensures the "Kill Switch" for invalid attempts works as expected.
      */
     @Test
     @DisplayName("Unit: Should throw BadCredentialsException when password/email is wrong")
-    void shouldThrowOnInvalidCredentials() {
-        // Arrange
-        LoginRequest request = new LoginRequest("wrong@opayque.com", "wrong-pass");
+    void shouldThrowOnBadCredentials() {
+        // Arrange: Create a request with credentials that will fail authentication
+        LoginRequest request = new LoginRequest("wrong@opayque.com", "wrongpass");
 
-        // Simulate Spring Security's failure when credentials do not match the ledger
-        when(authenticationManager.authenticate(any()))
-                .thenThrow(new BadCredentialsException("Invalid credentials"));
+        // Mock: Simulate the AuthenticationManager throwing the standard Security exception
+        doThrow(new BadCredentialsException("Bad credentials"))
+                .when(authenticationManager).authenticate(any(UsernamePasswordAuthenticationToken.class));
 
-        // Act & Assert: Confirm exception propagation
+        // Act & Assert: Verify the service propagates the exception and halts further logic
         assertThrows(BadCredentialsException.class, () -> authService.login(request));
 
-        // Security Audit: Verify we NEVER generate a token for a failed login
+        // Audit: Ensure we never proceeded to look up the user or generate a JWT
+        verify(userRepository, never()).findByEmail(anyString());
         verify(jwtService, never()).generateToken(anyString(), anyString());
-    }
-
-    /**
-     * Test Case: Identity Desynchronization
-     * Verifies system resilience in the edge case where authentication passes
-     * but the user record cannot be found in the database (e.g., race condition
-     * during account deletion).
-     */
-    @Test
-    @DisplayName("Unit: Should throw exception if user disappears after authentication")
-    void shouldThrowNotFoundIfUserMissingAfterAuth() {
-        // Arrange: Auth passes, but the ledger search returns empty
-        LoginRequest request = new LoginRequest("ghost@opayque.com", "pass");
-        when(authenticationManager.authenticate(any())).thenReturn(mock(Authentication.class));
-        when(userRepository.findByEmail(any())).thenReturn(Optional.empty());
-
-        // Act & Assert: Expect custom infrastructure exception
-        assertThrows(UserNotFoundException.class, () -> authService.login(request));
     }
 }

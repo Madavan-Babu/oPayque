@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
+      # --- PERSISTENCE LAYER: POSTGRESQL ---
       postgres:
         image: postgres:15-alpine
         env:
@@ -21,6 +22,17 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      # --- CACHE LAYER: REDIS ---
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -37,18 +49,20 @@ jobs:
           cache: 'maven'
 
       - name: Build and Verify with Maven
+        # Note: 'verify' lifecycle includes unit, integration, and archunit tests
         run: mvn --batch-mode --update-snapshots verify
         env:
           # --- DATABASE CONFIGURATION (CI OVERRIDES) ---
-          # 1. Connection Details
           SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/opayque_test
           SPRING_DATASOURCE_USERNAME: ci_user
           SPRING_DATASOURCE_PASSWORD: ci_password
-
-          # 2. Driver & Dialect (CRITICAL FIX)
-          # These overrides prevent Spring from using the H2 settings in application-test.yaml
           SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
           SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
 
-          # 3. Secrets
+          # --- REDIS CONFIGURATION (CI OVERRIDES) ---
+          # Injects localhost mapping for the Redis service container
+          SPRING_DATA_REDIS_HOST: localhost
+          SPRING_DATA_REDIS_PORT: 6379
+
+          # --- SECRETS ---
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}

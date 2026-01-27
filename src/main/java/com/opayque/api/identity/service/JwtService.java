@@ -76,6 +76,10 @@ public class JwtService {
         return decodeToken(token).getSubject();
     }
 
+    public Date extractExpiration(String token) {
+        return decodeToken(token).getExpiresAt();
+    }
+
     /**
      * Extracts the security role claim from the provided token.
      * * @param token The signed JWT.

@@ -1,0 +1,20 @@
+services:
+  # Redis: The Identity Kill-Switch Store
+  redis:
+    image: redis:7-alpine
+    container_name: opayque-redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  # Postgres: The Core Ledger (Moving it here prevents native conflicts)
+  db:
+    image: postgres:15-alpine
+    container_name: opayque-db
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    restart: always

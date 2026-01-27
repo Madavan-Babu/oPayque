@@ -17,12 +17,14 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Epic 1: Identity & Access Management - Story 1.1 User Registration
- * * This service handles the business logic for user authentication and onboarding.
- * It ensures that sensitive data, like passwords, are never stored in plain text
- * by utilizing BCrypt hashing.
- */
+import java.time.Duration;
+import java.util.Date;
+
+/// Epic 1: Identity & Access Management - Authentication Service
+///
+/// This service orchestrates the high-level business logic for the oPayque "Trust Layer."
+/// It manages user persistence with atomicity, credential verification via Spring Security,
+/// and token lifecycle management.
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -32,42 +34,35 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JwtService jwtService;
+    private final TokenBlocklistService tokenBlocklistService;
 
-    /**
-     * Registers a new user within the oPayque ecosystem.
-     * * Uses Spring's @Transactional to ensure that the registration process is atomic;
-     * if the database save fails, no partial data will be persisted.
-     *
-     * @param request The validated registration data.
-     * @return A sanitized RegisterResponse containing non-sensitive user metadata.
-     * @throws UserAlreadyExistsException if the provided email is already registered in the system.
-     */
+    /// Registers a new user identity while enforcing the "Soft Delete" compliance policy.
+    ///
+    /// @param request The user data to persist.
+    /// @return A safe DTO containing the saved identity.
+    /// @throws UserAlreadyExistsException if an active identity with the email already exists.
     @Transactional
     public RegisterResponse register(RegisterRequest request) {
-        log.info("Attempting to register new user with email: {}", request.email());
+        log.info("Processing registration for: {}", request.email());
 
-        // 1. Identity Guardrail: Enhanced check to ensure email is not tied to an active account.
-        // This logic accounts for our Soft Delete strategy.
+        // Identity Guardrail: Ensure we don't duplicate active accounts
         if (userRepository.findByEmail(request.email())
                 .map(user -> user.getDeletedAt() == null)
                 .orElse(false)) {
-            log.warn("Registration failed: Active account with email {} already exists", request.email());
+            log.warn("Registration Conflict: Email [{}] is currently in use.", request.email());
             throw new UserAlreadyExistsException("Email already in use");
         }
 
-        // 2. Build the User entity with a one-way hashed password
         User user = User.builder()
                 .email(request.email())
-                .password(passwordEncoder.encode(request.password())) // Standardized BCrypt hashing
+                .password(passwordEncoder.encode(request.password())) // One-way BCrypt hash
                 .fullName(request.fullName())
-                .role(Role.CUSTOMER) // Default role assignment
+                .role(Role.CUSTOMER)
                 .build();
 
-        // 3. Persist the new user to the ledger
         User savedUser = userRepository.save(user);
-        log.info("User successfully registered with ID: {}", savedUser.getId());
+        log.info("New user identity successfully established with ID: {}", savedUser.getId());
 
-        // 4. Transform to a safe Response DTO (Opaque to internal entity structure)
         return new RegisterResponse(
                 savedUser.getId(),
                 savedUser.getEmail(),
@@ -76,25 +71,45 @@ public class AuthService {
         );
     }
 
-    /**
-     * Authenticates user credentials and returns a signed JWT.
-     */
+    /// Authenticates credentials and issues a "Key Card" (JWT) for the system.
+    ///
+    /// @param request The email and password provided by the client.
+    /// @return A signed token for subsequent authorized requests.
     public LoginResponse login(LoginRequest request) {
-        log.info("Attempting login for user: {}", request.email());
+        log.info("Authenticating user: {}", request.email());
 
-        // 1. Let Spring Security handle the credential check
+        // Delegate to the manager for standardized credential matching
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(request.email(), request.password())
         );
 
-        // 2. If we reached here, authentication was successful. Retrieve user to get roles.
         User user = userRepository.findByEmail(request.email())
-                .orElseThrow(() -> new UserNotFoundException("User not found after authentication"));
+                .orElseThrow(() -> new UserNotFoundException("User identity not found after authentication challenge"));
 
-        // 3. Generate the "Key Card"
+        // Generate the cryptographically signed token with role claims
         String jwtToken = jwtService.generateToken(user.getEmail(), user.getRole().name());
 
-        log.info("Login successful for user: {}", request.email());
+        log.info("Authentication successful. Issuing JWT for user: {}", request.email());
         return new LoginResponse(jwtToken);
+    }
+
+    /// STORY 1.4: Revokes a JWT's validity before its natural expiration.
+    ///
+    /// Calculates the remaining TTL and persists the signature to Redis to prevent
+    /// "Ghost Session" attacks in our stateless environment.
+    ///
+    /// @param token The raw Bearer token string.
+    public void logout(String token) {
+        Date expiration = jwtService.extractExpiration(token);
+        long ttlMillis = expiration.getTime() - System.currentTimeMillis();
+
+        if (ttlMillis > 0) {
+            // Extract the signature segment for the blocklist key
+            String signature = token.substring(token.lastIndexOf(".") + 1);
+            tokenBlocklistService.blockToken(signature, Duration.ofMillis(ttlMillis));
+            log.info("JWT Revoked: Signature added to blocklist for remaining TTL ({} ms)", ttlMillis);
+        } else {
+            log.warn("Logout redundant: Token has already expired naturally.");
+        }
     }
 }

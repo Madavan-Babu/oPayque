@@ -55,4 +55,10 @@ public final class SecurityUtil {
         log.error("Security Integrity Failure: Principal is [{}] but expected oPayque User entity", principal.getClass());
         throw new IllegalStateException("Principal is not of the expected User type");
     }
+
+    /// Safely clears the current security context.
+    /// Used during logout to prevent thread-local leakage.
+    public static void clear() {
+        SecurityContextHolder.clearContext();
+    }
 }

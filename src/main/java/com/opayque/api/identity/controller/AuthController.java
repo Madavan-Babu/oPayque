@@ -5,28 +5,20 @@ import com.opayque.api.identity.dto.LoginResponse;
 import com.opayque.api.identity.dto.RegisterRequest;
 import com.opayque.api.identity.dto.RegisterResponse;
 import com.opayque.api.identity.service.AuthService;
+import com.opayque.api.infrastructure.util.SecurityUtil;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
-/// Epic 1: Identity & Access Management - Authentication Gateway
+/// Epic 1: Identity & Access Management - Authentication API
 ///
-/// This controller serves as the primary entry point for user onboarding and credential issuance.
-/// It adheres to a strict layered architecture, ensuring that the web layer only handles request
-/// mapping, logging, and validation, while all business logic is encapsulated within the
-/// service layer.
-///
-/// ### Design Principles:
-/// - **Validation-First**: Employs `@Valid` to reject malformed payloads before they reach the core logic.
-/// - **Opaque Responses**: Returns sanitized DTOs to prevent leaking internal database structures.
-/// - **Stateless Execution**: Supports the scale-out requirements of our AWS-hosted infrastructure.
-@Slf4j
+/// This controller provides the primary endpoints for user lifecycle management,
+/// including registration, credential verification, and secure logout.
+/// It enforces the **"Opaque Security"** principle by strictly using DTOs and
+/// delegating business logic to the service layer.
 @RestController
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor
@@ -34,37 +26,46 @@ public class AuthController {
 
     private final AuthService authService;
 
-    /// Handles incoming registration requests for new users.
+    /// Registers a new user identity in the oPayque ecosystem.
     ///
-    /// The `@Valid` annotation ensures that fields such as email and password meet the
-    /// required constraints defined in the {@link RegisterRequest}.
-    ///
-    /// @param request The validated user registration data.
-    /// @return A {@link RegisterResponse} containing non-sensitive account metadata with a 201 Created status.
+    /// @param request The validated registration payload.
+    /// @return A 201 Created status with the {@link RegisterResponse}.
     @PostMapping("/register")
-    public ResponseEntity<RegisterResponse> register(@Valid @RequestBody RegisterRequest request) {
-        log.info("REST request to register new user identity: {}", request.email());
-
-        // Delegation to AuthService ensures password hashing and atomic persistence
-        RegisterResponse response = authService.register(request);
-
-        return new ResponseEntity<>(response, HttpStatus.CREATED);
+    public ResponseEntity<RegisterResponse> register(@RequestBody @Valid RegisterRequest request) {
+        return new ResponseEntity<>(authService.register(request), HttpStatus.CREATED);
     }
 
-    /// Authenticates existing users and issues stateless JWT credentials.
+    /// Authenticates user credentials and issues a stateless JWT.
     ///
-    /// Validates the provided {@link LoginRequest} against the encrypted ledger. Upon
-    /// success, it returns a Bearer token for authorized access to core banking functions.
-    ///
-    /// @param request The validated login credentials (email and password).
-    /// @return A {@link LoginResponse} containing the signed JWT and authentication type.
+    /// @param request The validated login credentials.
+    /// @return A 200 OK status with the signed {@link LoginResponse}.
     @PostMapping("/login")
-    public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
-        log.info("REST request to authenticate user: {}", request.email());
+    public ResponseEntity<LoginResponse> authenticate(@RequestBody @Valid LoginRequest request) {
+        return ResponseEntity.ok(authService.login(request));
+    }
 
-        // Triggers the internal Spring Security authentication flow and token generation
-        LoginResponse response = authService.login(request);
+    /// Terminates the user's current session by invalidating the provided JWT.
+    ///
+    /// This endpoint implements a manual "Kill Switch" by adding the token to the
+    /// blocklist. Note that `required = false` on the header allows the controller
+    /// to return a semantically correct 401 instead of a framework-level error.
+    ///
+    /// @param authHeader The raw Authorization header containing the Bearer token.
+    /// @return 200 OK on success, or 401 Unauthorized if the header is missing/invalid.
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authHeader
+    ) {
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String token = authHeader.substring(7);
+            authService.logout(token);
 
-        return ResponseEntity.ok(response);
+            // Clear the thread-local context to finalize logout in the current request
+            SecurityUtil.clear();
+            return ResponseEntity.ok().build();
+        }
+
+        // Return 401 to satisfy security protocols for missing/malformed headers
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
     }
 }

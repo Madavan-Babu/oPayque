@@ -1,6 +1,7 @@
 package com.opayque.api.identity.security;
 
 import com.opayque.api.identity.service.JwtService;
+import com.opayque.api.identity.service.TokenBlocklistService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -18,15 +19,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 
-/// Epic 1: Identity & Access Management - Stateless Security Filter
-/// * This industrial-grade security filter intercepts every incoming HTTP request
-/// to validate JSON Web Tokens (JWTs). It acts as the "Opaque" bridge between
-/// raw HTTP headers and the Spring Security Context.
-/// * Logic Flow:
-/// 1. Extract 'Authorization' header.
-/// 2. Validate cryptographic signature via [JwtService].
-/// 3. Load identity from the database.
-/// 4. Populate [SecurityContextHolder] for stateless authorization.
+/// Epic 1: Identity & Access Management - Stateless Security Gatekeeper
+///
+/// This filter intercepts every incoming request to perform cryptographic
+/// validation of JWTs and check the **Story 1.4: Kill Switch** blocklist.
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -34,10 +30,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
     private final UserDetailsService userDetailsService;
+    private final TokenBlocklistService tokenBlocklistService;
 
-    /// Intercepts the request to check for a valid Bearer token.
-    /// * Ensures that the filter executes exactly once per request to maintain
-    /// high-performance standards in our containerized AWS environment.
+    /// Per-request logic for token extraction, revocation checking, and identity establishment.
     @Override
     protected void doFilterInternal(
             @NonNull HttpServletRequest request,
@@ -49,44 +44,47 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         final String jwt;
         final String userEmail;
 
-        // 1. Quick exit: If the header is missing or malformed, we delegate to the next filter
-        // Public endpoints (like registration) will be allowed by the SecurityConfig later.
+        // 1. Quick Exit: Validate header presence and Bearer scheme
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        jwt = authHeader.substring(7); // Extract the token segment after "Bearer "
+        jwt = authHeader.substring(7);
 
-        // 2. Perform cryptographic and temporal validation via JwtService
+        // 2. STORY 1.4: REVOCATION CHECK
+        // Extract the unique signature segment of the JWT to check the Redis Blocklist.
+        // This provides an "Opaque" way to revoke individual tokens without database lookups.
+        String signature = jwt.substring(jwt.lastIndexOf(".") + 1);
+
+        if (tokenBlocklistService.isBlocked(signature)) {
+            log.warn("Blocked Token Attempt: Rejected request with revoked signature segment.");
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"status\":401,\"code\":\"UNAUTHORIZED\",\"message\":\"Token has been revoked.\"}");
+            return;
+        }
+
+        // 3. Authenticate: Verify cryptographic integrity and establish SecurityContext
         if (jwtService.isTokenValid(jwt)) {
             userEmail = jwtService.extractEmail(jwt);
 
-            // 3. Authenticate only if a user is present in token and not yet authenticated in this thread
             if (userEmail != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-                log.debug("Found valid JWT for user: {}. Initializing authentication...", userEmail);
-
                 UserDetails userDetails = this.userDetailsService.loadUserByUsername(userEmail);
 
-                // Create an authentication object using the credentials and roles found in the ledger
                 UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
                         userDetails,
                         null,
                         userDetails.getAuthorities()
                 );
 
-                // Enrich the authentication with request-based details (IP, SessionID)
                 authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-
-                // 4. Update the Security Context to allow subsequent logic (Wallet/Transfers) to trust this user
                 SecurityContextHolder.getContext().setAuthentication(authToken);
-                log.info("Successfully established Security Context for user: {}", userEmail);
             }
         } else {
-            log.warn("Invalid or expired JWT detected for a request to: {}", request.getServletPath());
+            log.warn("Invalid/Expired JWT: Access denied for request path: {}", request.getServletPath());
         }
 
-        // Always continue the filter chain
         filterChain.doFilter(request, response);
     }
 }

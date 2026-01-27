@@ -26,20 +26,18 @@ import java.util.Map;
 @Slf4j
 public class GlobalExceptionHandler {
 
-    /// Handles business logic conflicts, specifically when a user attempts to register
-    /// with an email that is already persisted in the ledger.
+    /// Handles business logic conflicts, specifically during user registration.
     ///
     /// @param ex The custom UserAlreadyExistsException.
     /// @param request The web request context.
-    /// @return A 409 Conflict response with a standardized ErrorResponse.
+    /// @return A 409 Conflict response with a standardized {@link ErrorResponse}.
     @ExceptionHandler(UserAlreadyExistsException.class)
     public ResponseEntity<ErrorResponse> handleUserExists(UserAlreadyExistsException ex, WebRequest request) {
         log.debug("Conflict detected: Registration attempt with existing email. Reason: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
-    /// Handles Bean Validation failures triggered by the `@Valid` annotation on
-    /// incoming DTO payloads.
+    /// Handles Bean Validation failures triggered by the `@Valid` annotation on incoming DTO payloads.
     ///
     /// *Note: This remains distinct as it returns a Map of fields, not a single message.*
     ///
@@ -55,9 +53,9 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(errors);
     }
 
-    /// Handles instances where a requested user identity cannot be found during login or audit lookups.
+    /// Handles instances where a requested user identity cannot be found in the ledger.
     ///
-    /// @param ex The UserNotFoundException thrown by the service layer.
+    /// @param ex The {@link UserNotFoundException} thrown by the service layer.
     /// @param request The current web request used to extract the URI path.
     /// @return A 404 Not Found response containing detailed error metadata.
     @ExceptionHandler(UserNotFoundException.class)
@@ -66,11 +64,11 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), request);
     }
 
-    /// Intercepts Spring Security's authentication failures to prevent unauthorized entry.
+    /// Intercepts Spring Security's authentication failures.
     ///
-    /// @param ex The BadCredentialsException thrown by the AuthenticationManager.
+    /// @param ex The {@link BadCredentialsException} thrown by the AuthenticationManager.
     /// @param request The current web request.
-    /// @return A 401 Unauthorized status with a sanitized ErrorResponse.
+    /// @return A 401 Unauthorized status with a sanitized {@link ErrorResponse}.
     @ExceptionHandler(BadCredentialsException.class)
     public ResponseEntity<ErrorResponse> handleBadCredentials(BadCredentialsException ex, WebRequest request) {
         log.warn("Authentication failure on path [{}]: {}",
@@ -85,9 +83,29 @@ public class GlobalExceptionHandler {
         );
     }
 
-    /// Security Gate Handler
-    /// Catches generic 403 errors (AccessDenied) and Spring Security 6 specific errors (AuthorizationDenied).
-    /// This prevents the system from leaking a 500 Internal Server Error when a user is simply blocked.
+    /// Handles attempts to use a JWT that has been revoked via the **Story 1.4: Kill Switch**.
+    ///
+    /// @param ex The {@link TokenRevokedException} thrown when a blacklisted signature is detected.
+    /// @param request The web request context.
+    /// @return A 401 Unauthorized response.
+    @ExceptionHandler(TokenRevokedException.class)
+    public ResponseEntity<ErrorResponse> handleTokenRevoked(TokenRevokedException ex, WebRequest request) {
+        log.warn("Revoked token access attempt on path [{}]: {}",
+                request.getDescription(false).replace("uri=", ""),
+                ex.getMessage());
+
+        return buildErrorResponse(
+                HttpStatus.UNAUTHORIZED,
+                "TOKEN_REVOKED",
+                ex.getMessage(),
+                request
+        );
+    }
+
+    /// Catches generic 403 errors and Spring Security 6 specific authorization denials.
+    ///
+    /// This prevents the system from leaking internal configuration details when a
+    /// security gate blocks a request.
     @ExceptionHandler({AccessDeniedException.class, AuthorizationDeniedException.class})
     public ResponseEntity<ErrorResponse> handleAccessDenied(Exception ex, WebRequest request) {
         log.warn("Security Gate Blocked: {} - {}", request.getDescription(false), ex.getMessage());
@@ -100,12 +118,8 @@ public class GlobalExceptionHandler {
 
     /// Fallback handler for unexpected internal server errors.
     ///
-    /// Ensures that sensitive internal logic is not leaked while providing full visibility
-    /// in CloudWatch through detailed error logging.
-    ///
-    /// @param ex The generic Exception caught by the framework.
-    /// @param request The current web request.
-    /// @return A 500 Internal Server Error status with a generic ErrorResponse.
+    /// Provides full visibility in **AWS CloudWatch** through detailed error logging while
+    /// returning a sanitized response to the client.
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGlobalException(Exception ex, WebRequest request) {
         log.error("CRITICAL: Unexpected system failure encountered on path: {}",
@@ -122,8 +136,7 @@ public class GlobalExceptionHandler {
     //                                 PRIVATE HELPERS
     // ==================================================================================
 
-    /// Convenience Helper: Uses the HTTP Status Name as the Error Code.
-    /// Example: 404 -> "NOT_FOUND"
+    /// Convenience Helper: Uses the HTTP Status Name as the Error Code (e.g., 404 -> "NOT_FOUND").
     private ResponseEntity<ErrorResponse> buildErrorResponse(
             HttpStatus status,
             String message,
@@ -132,8 +145,7 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(status, status.name(), message, request);
     }
 
-    /// Master Error Factory
-    /// Allows specifying a custom 'code' (e.g., "INVALID_CREDENTIALS") different from the Status Name.
+    /// Master Error Factory: Builds a consistent {@link ErrorResponse} DTO.
     private ResponseEntity<ErrorResponse> buildErrorResponse(
             HttpStatus status,
             String code,
