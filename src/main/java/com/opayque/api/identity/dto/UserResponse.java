@@ -1,21 +1,24 @@
 package com.opayque.api.identity.dto;
 
 import com.opayque.api.identity.entity.Role;
+import com.opayque.api.infrastructure.util.Masked;
 import java.util.UUID;
 
-/// Epic 1: Identity & Access Management - Opaque Data Schema
+/// Epic 1: Identity & Access Management - Opaque Identity Representation.
 ///
-/// A safe, immutable representation of a User identity intended for public API consumption.
-/// This DTO strictly excludes sensitive credentials, such as hashed passwords, to maintain
-/// banking-grade data privacy standards.
+/// An immutable data transfer object utilized for public identity consumption.
+/// Adheres to banking-grade privacy standards by mandating field-level masking
+/// and strictly prohibiting credential exposure.
 ///
-/// @param id The unique Universally Unique Identifier (UUID) of the user.
-/// @param email The verified email address used as the primary identity.
-/// @param fullName The account holder's legal name.
-/// @param role The assigned Role-Based Access Control (RBAC) level.
+/// @param id The Universally Unique Identifier (UUID) of the user.
+/// @param email The primary identity string, sanitized via @Masked.
+/// @param fullName The legal name associated with the identity, sanitized via @Masked.
+/// @param role The current Role-Based Access Control (RBAC) level.
 public record UserResponse(
         UUID id,
+        @Masked
         String email,
+        @Masked
         String fullName,
         Role role
 ) {}

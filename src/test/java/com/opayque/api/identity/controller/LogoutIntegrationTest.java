@@ -72,6 +72,9 @@ class LogoutIntegrationTest {
         JsonNode jsonNode = objectMapper.readTree(loginResult.getResponse().getContentAsString());
         validToken = jsonNode.get("token").asText();
 
+        // Force JPA to write to DB before we try to find it
+        userRepository.flush();
+
         userId = userRepository.findByEmail(testEmail)
                 .orElseThrow(() -> new AssertionError("Identity ledger synchronization failed"))
                 .getId().toString();

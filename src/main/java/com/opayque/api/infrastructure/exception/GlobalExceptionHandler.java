@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authorization.AuthorizationDeniedException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -114,6 +115,22 @@ public class GlobalExceptionHandler {
                 "Access Denied: You do not have permission to view this resource",
                 request
         );
+    }
+
+    /// Handles instances where a requested URL path does not map to a physical resource or controller.
+    /// This ensures that 404 errors return a standardized [ErrorResponse] instead of
+    /// a generic internal failure.
+    ///
+    /// @param ex The [NoResourceFoundException] thrown when no static resource or handler is found.
+    /// @param request The current web request used to extract the URI path.
+    /// @return A 404 Not Found response containing sanitized error metadata.
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNoResourceFound(NoResourceFoundException ex, WebRequest request) {
+        log.error("Resource not found on path [{}]: {}",
+                request.getDescription(false).replace("uri=", ""),
+                ex.getMessage());
+
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Resource not found", request);
     }
 
     /// Fallback handler for unexpected internal server errors.
