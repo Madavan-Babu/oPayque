@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opayque.api.identity.dto.LoginRequest;
 import com.opayque.api.identity.dto.RegisterRequest;
+import com.opayque.api.identity.repository.RefreshTokenRepository;
 import com.opayque.api.identity.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -36,6 +37,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class LogoutIntegrationTest {
 
     @Autowired private MockMvc mockMvc;
+    @Autowired private RefreshTokenRepository refreshTokenRepository;
     @Autowired private UserRepository userRepository;
     @Autowired private ObjectMapper objectMapper;
 
@@ -49,6 +51,8 @@ class LogoutIntegrationTest {
     /// a valid JWT, ensuring that logout tests are grounded in an active session.
     @BeforeEach
     void setUp() throws Exception {
+        // Must delete child records (Tokens) before parent records (Users)
+        refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
 
         // High-Precision isolation: Ensures unique signatures for every test run

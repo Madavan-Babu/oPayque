@@ -8,85 +8,76 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/// Epic 1: Identity & Access Management - JWT Security Audit
-/// * This test suite validates the cryptographic integrity and claim management
-/// of our stateless authentication service. It ensures that the oPayque API
-/// can securely issue tokens and detect unauthorized tampering or expired
-/// credentials.
-/// * Security Standards:
-/// - HMAC-SHA for signature verification.
-/// - Temporal validation (Expiration checks).
-/// - Claim-based authorization (Email and Role).
+/// Epic 1: Identity & Access Management - JWT Security Audit.
+///
+/// This test suite validates the cryptographic integrity and claim management
+/// of the stateless authentication service.
+/// It ensures that the oPayque API can securely issue tokens and detect unauthorized
+/// tampering or expired credentials.
+///
+/// Testing Strategy: Pure Unit Testing (No Spring Context) for sub-millisecond
+/// execution within CI/CD pipelines.
 @ExtendWith(MockitoExtension.class)
 class JwtServiceTest {
 
     private JwtService jwtService;
 
-    /** Requirement: 256-bit entropy for HS256 algorithm safety. */
+    /// Requirement: 256-bit entropy for HS256 algorithm safety.
     private final String SECRET = "bank-grade-secret-key-at-least-32-chars-long";
 
-    /** Standard expiration set to 1 hour (36,00,000 ms). */
+    /// Standard access token expiration: 1 hour (3,600,000 ms).
     private final long EXPIRATION = 3600000;
 
-    /**
-     * Initializes the service manually for pure unit testing.
-     * This avoids Spring context overhead, ensuring ultra-fast execution in the
-     * CI/CD pipeline.
-     */
+    /// Refresh Token expiration: 7 days (604,800,000 ms).
+    private final long REFRESH_EXPIRATION = 604800000;
+
+    /// Initializes the service manually before each test case.
+    /// Injects specific temporal and cryptographic properties for pure unit testing
+    /// isolation.
     @BeforeEach
-     void setUp() {
-        jwtService = new JwtService(SECRET, EXPIRATION);
+    void setUp() {
+        jwtService = new JwtService(SECRET, EXPIRATION, REFRESH_EXPIRATION);
     }
 
-    /**
-     * Verifies that the token generation logic correctly encodes identity claims.
-     * This is vital for maintaining the "Opaque" security model where the
-     * token carries all necessary context.
-     */
+    /// Verifies that the token generation logic correctly encodes identity claims.
+    ///
+    /// Confirms that Subject (email) and Role claims are correctly embedded and
+    /// recoverable from the signed JWT.
     @Test
     @DisplayName("Unit: Verify token contains correct email and role claims")
     void shouldGenerateTokenWithCorrectClaims() {
-        // Arrange
         String email = "pro@opayque.com";
         String role = "ROLE_CUSTOMER";
 
-        // Act
         String token = jwtService.generateToken(email, role);
 
-        // Assert
         assertNotNull(token);
         assertEquals(email, jwtService.extractEmail(token));
         assertEquals(role, jwtService.extractRole(token));
     }
 
-    /**
-     * Validates cryptographic signature enforcement.
-     * Any alteration to the JWT signature segment must result in an immediate
-     * rejection to prevent session hijacking.
-     */
+    /// Validates cryptographic signature enforcement.
+    ///
+    /// Ensures that the verifier correctly identifies and rejects tokens that have
+    /// undergone manual bit-flipping or tampering in the signature segment
+    ///.
     @Test
     @DisplayName("Unit: Ensure token is signed with our secret key")
     void shouldGenerateValidSignature() {
-        // Arrange
         String token = jwtService.generateToken("dev@opayque.com", "ROLE_ADMIN");
 
-        // Act & Assert: Valid token should pass
         assertTrue(jwtService.isTokenValid(token));
 
-        // Manual tamper: Corrupt the signature (3rd part of JWT)
+        // Manual tamper: Corrupt the cryptographic signature (3rd segment of JWT)
         String[] parts = token.split("\\.");
         String tamperedSignature = parts[2].substring(0, parts[2].length() - 1) +
                 (parts[2].endsWith("A") ? "B" : "A");
         String tamperedToken = parts[0] + "." + parts[1] + "." + tamperedSignature;
 
-        // Assert: Signature verification must fail
         assertFalse(jwtService.isTokenValid(tamperedToken));
     }
 
-    /**
-     * Ensures that the username (email) can be accurately extracted from
-     * the subject claim of the JWT.
-     */
+    /// Validates extraction of the primary identity string (email).
     @Test
     @DisplayName("Unit: Verify extraction of email (username) from token")
     void shouldExtractUsername() {
@@ -98,22 +89,41 @@ class JwtServiceTest {
         assertEquals(expectedEmail, actualEmail);
     }
 
-    /**
-     * Verifies the temporal "Gatekeeper" logic.
-     * Expired tokens must be invalidated to protect against replay attacks
-     *.
-     */
+    /// Verifies temporal gatekeeping and expiration logic.
+    ///
+    /// Confirms that tokens exceeding their configured TTL (Time-To-Live) are
+    /// rejected by the cryptographic verifier.
     @Test
     @DisplayName("Unit: Should reject an expired token")
     void shouldRejectExpiredToken() throws InterruptedException {
-        // Arrange: Create a service with 1ms TTL for testing
-        JwtService shortLivedService = new JwtService(SECRET, 1);
+        // Arrange: Instantiate a temporary service with 1ms TTL
+        JwtService shortLivedService = new JwtService(SECRET, 1, REFRESH_EXPIRATION);
         String token = shortLivedService.generateToken("old@opayque.com", "ROLE_USER");
 
-        // Act: Force expiration through delay
+        // Act: Induce temporal breach via sleep
         Thread.sleep(10);
 
-        // Assert
+        // Assert: Cryptographic validation must fail
         assertFalse(shortLivedService.isTokenValid(token));
+    }
+
+    // --- Story 1.6: Opaque Token Verification ---
+
+    /// Verifies that Refresh Tokens utilize an Opaque structure.
+    ///
+    /// Confirms that generated refresh tokens are high-entropy, random strings and
+    /// strictly do not follow the RFC 7519 JWT structure.
+    @Test
+    @DisplayName("Unit: Refresh Token must be Opaque (Not a JWT)")
+    void generateRefreshToken_ShouldReturnOpaqueString() {
+        String refreshToken = jwtService.generateRefreshToken();
+
+        assertNotNull(refreshToken);
+        assertTrue(refreshToken.length() > 20, "Refresh token should be high entropy (long)");
+
+        // Integrity Check: Opaque tokens must not contain the '.' delimiter
+        // characteristic of JWT Header.Payload.Signature structures.
+        long dots = refreshToken.chars().filter(ch -> ch == '.').count();
+        assertNotEquals(2, dots, "Refresh Token MUST NOT be a JWT structure");
     }
 }

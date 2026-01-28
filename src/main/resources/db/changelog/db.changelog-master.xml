@@ -28,4 +28,6 @@
         </createTable>
     </changeSet>
 
+    <include file="db/changelog/changes/002-create-refresh-tokens.xml" relativeToChangelogFile="false"/>
+
 </databaseChangeLog>

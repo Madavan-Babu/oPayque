@@ -2,6 +2,7 @@ package com.opayque.api.identity.controller;
 
 import com.opayque.api.identity.entity.Role;
 import com.opayque.api.identity.entity.User;
+import com.opayque.api.identity.repository.RefreshTokenRepository;
 import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.identity.service.JwtService;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +36,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class BolaIntegrationTest {
 
     @Autowired private MockMvc mockMvc;
+    @Autowired private RefreshTokenRepository refreshTokenRepository;
     @Autowired private UserRepository userRepository;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private JwtService jwtService;
@@ -51,6 +53,7 @@ class BolaIntegrationTest {
     @BeforeEach
     void setUp() {
         // Clear the persistence layer to maintain idempotent test results
+        refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
 
         // 1. Initialize and persist the "Thief" (The attacker)
