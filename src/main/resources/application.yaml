@@ -1,15 +1,15 @@
 spring:
+  profiles:
+    active: dev # Default for local coding
   application:
     name: oPayque-API
-  datasource:
-    url: jdbc:postgresql://localhost:5432/opayque_db
-    username: madavan # Who might this be?
-    password: ${DB_PASSWORD} # This uses the environment variable on my machine
-  jpa:
-    hibernate:
-      ddl-auto: validate # let Liquibase handle the schema
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
-  liquibase:
-    change-log: classpath:db/changelog/db.changelog-master.xml
+
+# Custom properties
+application:
+  security:
+    jwt:
+      # Use a 64-character hex string in production! (REMEMBER TO CHANGE THIS!)
+      secret-key: ${JWT_SECRET_KEY:v3ry-s3cr3t-b4nk-gr4d3-k3y-th4t-sh0uld-b3-v3ry-l0ng}
+      expiration: 900000 # 15 mins
+      refresh-token:
+        expiration: 604800000 # 7 Days (milliseconds)
