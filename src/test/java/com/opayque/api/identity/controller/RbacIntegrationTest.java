@@ -13,6 +13,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -30,6 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /// - **Stateless Role Mapping**: Confirming roles embedded in the JWT are correctly parsed by the filter chain.
 /// - **Authentication vs. Authorization**: Distinguishing between missing credentials (401) and insufficient permissions (403).
 @SpringBootTest
+@ActiveProfiles("test")
 @AutoConfigureMockMvc
 class RbacIntegrationTest {
 
