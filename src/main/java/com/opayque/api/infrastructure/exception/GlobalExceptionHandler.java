@@ -38,6 +38,8 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
+
+
     /// Handles Bean Validation failures triggered by the `@Valid` annotation on incoming DTO payloads.
     ///
     /// *Note: This remains distinct as it returns a Map of fields, not a single message.*
@@ -131,6 +133,28 @@ public class GlobalExceptionHandler {
                 ex.getMessage());
 
         return buildErrorResponse(HttpStatus.NOT_FOUND, "Resource not found", request);
+    }
+
+    /// Handles domain validation errors (e.g., Unsupported Territories like "INR").
+    ///
+    /// @param ex The {@link IllegalArgumentException} thrown by domain services.
+    /// @param request The web request context.
+    /// @return A 400 Bad Request response with a standardized {@link ErrorResponse}.
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex, WebRequest request) {
+        log.warn("Domain Validation Error: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
+    }
+
+    /// Handles business state violations (e.g., "Wallet already exists" 1:1 rule).
+    ///
+    /// @param ex The {@link IllegalStateException} thrown when a state invariant is breached.
+    /// @param request The web request context.
+    /// @return A 409 Conflict response with a standardized {@link ErrorResponse}.
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalState(IllegalStateException ex, WebRequest request) {
+        log.warn("Business Logic Violation: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
     /// Fallback handler for unexpected internal server errors.

@@ -5,6 +5,7 @@ import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.RefreshTokenRepository;
 import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.identity.service.JwtService;
+import com.opayque.api.wallet.repository.AccountRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,7 @@ class RbacIntegrationTest {
 
     @Autowired private MockMvc mockMvc;
     @Autowired private RefreshTokenRepository refreshTokenRepository;
+    @Autowired private AccountRepository accountRepository;
     @Autowired private UserRepository userRepository;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private JwtService jwtService;
@@ -49,31 +51,32 @@ class RbacIntegrationTest {
     /// This setup generates high-precision JWTs grounded in the actual database state,
     /// simulating a real-world multi-tier authentication flow.
     @BeforeEach
-    void setUp() {
-        // 1. Clear the deck to prevent test pollution and ensure idempotent runs
-        // Must delete child records (Tokens) before parent records (Users)
+    void setup() {
         refreshTokenRepository.deleteAll();
+        // FIX: Delete Child records (Accounts) first to satisfy Foreign Key
+        accountRepository.deleteAll();
+        // Then delete Parent records (Users)
         userRepository.deleteAll();
 
-        // 2. Create and Tokenize an ADMIN identity
+        // 1. Create ADMIN
         User admin = User.builder()
                 .email("admin@opayque.com")
-                .password(passwordEncoder.encode("adminPass"))
-                .fullName("Chief Admin")
+                .password(passwordEncoder.encode("pass"))
+                .fullName("Admin User")
                 .role(Role.ADMIN)
                 .build();
         userRepository.save(admin);
-        adminToken = jwtService.generateToken(admin.getEmail(), admin.getRole().name());
+        adminToken = jwtService.generateToken(admin.getEmail(), "ROLE_ADMIN");
 
-        // 3. Create and Tokenize a CUSTOMER identity
+        // 2. Create CUSTOMER
         User customer = User.builder()
                 .email("customer@opayque.com")
-                .password(passwordEncoder.encode("userPass"))
-                .fullName("Regular Joe")
+                .password(passwordEncoder.encode("pass"))
+                .fullName("Customer User")
                 .role(Role.CUSTOMER)
                 .build();
         userRepository.save(customer);
-        customerToken = jwtService.generateToken(customer.getEmail(), customer.getRole().name());
+        customerToken = jwtService.generateToken(customer.getEmail(), "ROLE_CUSTOMER");
     }
 
     /// Scenario 1: High-Privilege Success.

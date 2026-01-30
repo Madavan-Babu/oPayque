@@ -102,4 +102,19 @@ class GlobalExceptionHandlerTest {
         assertNotNull(body);
         assertEquals("Access Denied: You do not have permission to view this resource", body.message());
     }
+
+    /// Validates that domain validation errors (e.g., "User not found") are correctly
+    /// mapped to a 400 Bad Request status.
+    @Test
+    @DisplayName("Unit: Should handle IllegalArgumentException and return 400")
+    void shouldHandleIllegalArgumentException() {
+        IllegalArgumentException ex = new IllegalArgumentException("Invalid argument provided");
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleIllegalArgument(ex, webRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        ErrorResponse body = response.getBody();
+        assertNotNull(body);
+        assertEquals("BAD_REQUEST", body.code());
+        assertEquals("Invalid argument provided", body.message());
+    }
 }
