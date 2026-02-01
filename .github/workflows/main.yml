@@ -57,6 +57,11 @@ jobs:
           # This allows 'application-test.yaml' (H2) to work for unit tests,
           # while 'LedgerStressTest' (Postgres) sets its own config dynamically.
 
+          # --- 1. GLOBAL PROFILE FORCE ---
+          # This forces ALL tests to use 'application-test.yaml' (H2) by default.
+          # It prevents them from falling back to 'dev' (Postgres) and crashing on empty DBs.
+          SPRING_PROFILES_ACTIVE: test
+
           # --- REDIS CONFIGURATION (CI OVERRIDES) ---
           # Injects localhost mapping for the Redis service container
           SPRING_DATA_REDIS_HOST: localhost

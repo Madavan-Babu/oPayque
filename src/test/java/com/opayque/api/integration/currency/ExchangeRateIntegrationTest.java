@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.contract.wiremock.AutoConfigureWireMock;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -38,6 +39,7 @@ import static org.springframework.http.MediaType.APPLICATION_JSON_VALUE;
 )
 @Testcontainers
 @AutoConfigureWireMock(port = 0) // Random port for WireMock
+@ActiveProfiles("test")
 class ExchangeRateIntegrationTest {
 
     // --- Infrastructure: Real Redis via Testcontainers ---
