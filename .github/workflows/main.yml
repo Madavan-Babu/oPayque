@@ -12,19 +12,12 @@ jobs:
 
     services:
       # --- PERSISTENCE LAYER: POSTGRESQL ---
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_DB: opayque_test
-          POSTGRES_USER: ci_user
-          POSTGRES_PASSWORD: ci_password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+      # --- REMOVED POSTGRES SERVICE ---
+      # Reason: Optimization.
+      # 1. Unit Tests use H2 (application-test.yaml).
+      # 2. Integration Tests use Testcontainers (Self-managed).
+      # This saves ~300MB RAM to prevent OOM Kills during the Stress Test.
+
 
       # --- CACHE LAYER: REDIS ---
       redis:
@@ -68,4 +61,6 @@ jobs:
           SPRING_DATA_REDIS_PORT: 6379
 
           # --- SECRETS ---
+          # FIX: Added this back to guarantee Spring Security startup
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY || 'v3ry-s3cr3t-b4nk-gr4d3-k3y-th4t-sh0uld-b3-v3ry-l0ng' }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
