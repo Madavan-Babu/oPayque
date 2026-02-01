@@ -37,5 +37,8 @@
     <include file="db/changelog/changes/003-create-accounts-ledger.xml" relativeToChangelogFile="false"/>
     <include file="db/changelog/changes/004-add-iban-to-accounts.xml" relativeToChangelogFile="false"/>
     <include file="db/changelog/changes/005-create-account-sequence.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/changes/006-alter-ledger-add-exchange-metadata.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/changes/007-add-missing-ledger-columns.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/changes/008-add-description.xml" relativeToChangelogFile="false"/>
 
 </databaseChangeLog>

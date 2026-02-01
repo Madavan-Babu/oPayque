@@ -4,8 +4,53 @@ spring:
   application:
     name: oPayque-API
 
-# Custom properties
+  # =========================================================================
+  #                        BANK-GRADE CORE CONFIGURATION
+  # =========================================================================
+  # These settings define the architectural behavior of the ledger.
+  # They apply to ALL environments (Dev, Prod) unless explicitly overridden
+  # by the Test profile.
+
+  jpa:
+    # 1. ARCHITECTURAL SAFETY (NON-NEGOTIABLE)
+    # Forces Hibernate to generate "SELECT ... FOR UPDATE" SQL correctly via PESSIMISTIC_WRITE.
+    # Without this, locking might silently fail or revert to standard SELECTs in some environments.
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+        # 2. DRIVER COMPATIBILITY
+        # Fixes PostgreSQL 15+ metadata fetching issues and "CLOB" warnings.
+        jdbc:
+          use_get_generated_keys: true
+        temp:
+          use_jdbc_metadata_defaults: false
+
+  datasource:
+    hikari:
+      # 3. CAPACITY PLANNING & THROUGHPUT
+      # Defines how many concurrent transactions the application can handle.
+      #
+      # maximum-pool-size:
+      #   - Default: 30 (Good for ~300-500 TPS per instance)
+      #   - Scalable via Env Var: DB_POOL_SIZE
+      #
+      # minimum-idle:
+      #   - Keeps 10 connections warm to prevent "cold start" latency for new requests.
+      maximum-pool-size: ${DB_POOL_SIZE:30}
+      minimum-idle: ${DB_MIN_IDLE:10}
+      connection-timeout: 30000 # 30 seconds
+      max-lifetime: 1800000 # 30 minutes (Standard for Postgres resource reclamation)
+
+# =========================================================================
+#                            CUSTOM PROPERTIES
+# =========================================================================
 application:
+  integration:
+    exchange-rate:
+      base-url: https://v6.exchangerate-api.com/v6
+      api-key: ${EXCHANGE_RATE_API_KEY:dummy-key}
   security:
     jwt:
       # Use a 64-character hex string in production! (REMEMBER TO CHANGE THIS!)

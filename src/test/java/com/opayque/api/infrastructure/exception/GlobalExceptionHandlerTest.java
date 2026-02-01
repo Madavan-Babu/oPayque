@@ -117,4 +117,26 @@ class GlobalExceptionHandlerTest {
         assertEquals("BAD_REQUEST", body.code());
         assertEquals("Invalid argument provided", body.message());
     }
+
+    /// Validates that dependency failures (e.g., Currency Exchange offline) are
+    /// correctly mapped to a 503 Service Unavailable status.
+    @Test
+    @DisplayName("Unit: Should handle ServiceUnavailableException and return 503")
+    void shouldHandleServiceUnavailableException() {
+        // Arrange
+        ServiceUnavailableException ex = new ServiceUnavailableException("External Currency Provider Unavailable");
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleServiceUnavailable(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+
+        ErrorResponse body = response.getBody();
+        assertNotNull(body);
+        assertEquals("SERVICE_UNAVAILABLE", body.code());
+        assertEquals("External Currency Provider Unavailable", body.message());
+        // Verify path metadata is preserved
+        assertEquals("/test/path", body.path());
+    }
 }

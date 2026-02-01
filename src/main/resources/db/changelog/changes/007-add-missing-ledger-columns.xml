@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260131-002-add-missing-ledger-columns" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="ledger_entries"/>
+            <not>
+                <columnExists tableName="ledger_entries" columnName="currency"/>
+            </not>
+            <not>
+                <columnExists tableName="ledger_entries" columnName="original_amount"/>
+            </not>
+        </preConditions>
+
+        <comment>Fixing Schema Mismatch: Adding missing currency and audit fields</comment>
+
+        <addColumn tableName="ledger_entries">
+            <column name="currency" type="VARCHAR(3)" defaultValue="USD">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="original_amount" type="DECIMAL(19, 4)">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

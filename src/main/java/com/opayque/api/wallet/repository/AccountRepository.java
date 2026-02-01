@@ -1,9 +1,13 @@
 package com.opayque.api.wallet.repository;
 
 import com.opayque.api.wallet.entity.Account;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /// Multi-Currency Account Management - Persistence Abstraction.
@@ -33,4 +37,17 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
     /// @return The next incremental value from 'account_number_seq'.
     @Query(value = "SELECT nextval('account_number_seq')", nativeQuery = true)
     Long getNextAccountNumber();
+
+    // FIX: Override the standard findById with a PESSIMISTIC_WRITE lock.
+    // This issues a "SELECT ... FOR UPDATE" SQL command.
+    // Result: Thread B waits at the DB level until Thread A commits.
+    // No more OptimisticLockingFailureException on the parent User.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Override
+    Optional<Account> findById(UUID id);
+
+    //NEW FIX FOR LedgerStressTest
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT a FROM Account a WHERE a.id = :id")
+    Optional<Account> findByIdForUpdate(@Param("id") UUID id);
 }

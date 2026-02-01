@@ -36,11 +36,18 @@ public class WalletArchitectureTest {
                     "..identity.entity..",  // Authorized shared entities
                     "..identity.repository..", // Authorized shared persistence
                     "..infrastructure..",   // Cross-cutting concerns
+                    "..integration..",
                     "..common..",           // Shared utilities (@Masked)
-                    "java..", "javax..", "jakarta..",
-                    "org.springframework..", "org.slf4j..", "lombok..",
-                    "net.jqwik..", "org.junit.."
-            ).because("The Wallet Domain must be isolated from Identity web logic to ensure modularity.");
+                    "java..", "javax..", "jakarta..", // Standard Java
+                    "org.springframework..", "org.slf4j..", "lombok..", // Framework
+                    "net.jqwik..", "org.junit..", // Testing
+
+                    // --- NEW ALLOWED DEPENDENCIES ---
+                    "org.joda.money..",           // Approved Financial Library (Story 2.1)
+                    "org.hibernate.annotations..",// Approved Persistence Annotations (@Immutable)
+                    "io.github.resilience4j..",    // Approved Circuit Breaker (Story 2.3)
+                    "org.hibernate.proxy.." // THE FIX: Allow Hibernate Proxies (ByteBuddy)
+            ).because("The Wallet Domain must be isolated from Identity web logic, but allowed to use approved infrastructure libraries.");
 
     /// Pillar 2: Layered Architecture Enforcement.
     ///

@@ -6,18 +6,33 @@ spring:
   datasource:
     url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
     username: sa
-    password:
+    driver-class-name: org.h2.Driver
   jpa:
+    # 1. Force H2 Platform (Overrides Parent Postgres)
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
-      ddl-auto: validate
+      ddl-auto: validate # Validates Liquibase schema against Entities
+    properties:
+      hibernate:
+        # 2. Force H2 Dialect (Overrides Parent Postgres Dialect)
+        dialect: org.hibernate.dialect.H2Dialect
+        # 3. REVERT Driver Compatibility for H2
+        # The parent disables this for Postgres, but we must re-enable it for H2
+        temp:
+          use_jdbc_metadata_defaults: true
+        jdbc:
+          use_get_generated_keys: true
   liquibase:
-    enabled: true # Let the Robot test if your changelogs are valid!
+    enabled: true
     change-log: classpath:db/changelog/db.changelog-master.xml
-
 
 # Custom properties
 application:
+  integration:
+    exchange-rate:
+      # We will override this dynamically in the test class to point to WireMock's random port
+      base-url: http://localhost:8080/v6
+      api-key: test-dummy-key
   security:
     jwt:
       # Use a 64-character hex string in production! (REMEMBER TO CHANGE THIS!)

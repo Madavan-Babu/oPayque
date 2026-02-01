@@ -37,9 +37,16 @@ class LedgerSchemaIntegrationTest {
 
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) {
+        // 1. Connect to Container
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
+        // 2. CRITICAL FIX: Override the H2 settings from application-test.yaml
+        // We must tell Hibernate we are back on Postgres for this specific test.
+        registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
+        registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
+        registry.add("spring.jpa.properties.hibernate.dialect", () -> "org.hibernate.dialect.PostgreSQLDialect");
+        // 3. Liquibase Config
         registry.add("spring.liquibase.enabled", () -> "true");
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "none");
     }

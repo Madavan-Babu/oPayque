@@ -68,13 +68,19 @@ class JwtServiceTest {
 
         assertTrue(jwtService.isTokenValid(token));
 
-        // Manual tamper: Corrupt the cryptographic signature (3rd segment of JWT)
         String[] parts = token.split("\\.");
-        String tamperedSignature = parts[2].substring(0, parts[2].length() - 1) +
-                (parts[2].endsWith("A") ? "B" : "A");
+        String signature = parts[2];
+
+        // FIX: Tamper with the MIDDLE of the signature.
+        // Changing the last character is flaky because of Base64 padding bits.
+        // Changing the middle guarantees a different byte array.
+        char originalChar = signature.charAt(10);
+        char tamperedChar = (originalChar == 'A') ? 'B' : 'A';
+
+        String tamperedSignature = signature.substring(0, 10) + tamperedChar + signature.substring(11);
         String tamperedToken = parts[0] + "." + parts[1] + "." + tamperedSignature;
 
-        assertFalse(jwtService.isTokenValid(tamperedToken));
+        assertFalse(jwtService.isTokenValid(tamperedToken), "Tampered signature must be invalid");
     }
 
     /// Validates extraction of the primary identity string (email).
