@@ -14,6 +14,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -48,6 +50,18 @@ class WalletConcurrencyIntegrationTest {
     @Container
     @ServiceConnection
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15-alpine");
+
+    // FIX: Explicitly override the H2 settings from application-test.yaml
+    // The @ServiceConnection handles the URL, but NOT the driver/dialect.
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        // 1. Force Postgres Driver (Overrides H2 from YAML)
+        registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
+
+        // 2. Force Postgres Dialect (Overrides H2 from YAML)
+        registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
+        registry.add("spring.jpa.properties.hibernate.dialect", () -> "org.hibernate.dialect.PostgreSQLDialect");
+    }
 
     @Autowired private AccountService accountService;
     @Autowired private UserRepository userRepository;
