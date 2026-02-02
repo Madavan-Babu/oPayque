@@ -1,5 +1,6 @@
 package com.opayque.api.wallet.service;
 
+import com.opayque.api.wallet.entity.LedgerEntry;
 import com.opayque.api.identity.entity.Role;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
@@ -38,14 +39,33 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
+/// **High-Concurrency Ledger Stress Test — Reliability & ACID Verification Suite**.
+///
+/// This suite executes "Thundering Herd" scenarios against the [LedgerService] to audit the
+/// system's resilience under intense parallel load. It verifies that the "Reliability-First"
+/// approach holds true when multiple threads compete for the same [Account] resources.
+///
+/// **Architectural Objectives:**
+/// * **Concurrency Control:** Validates that Pessimistic Locking (`SELECT ... FOR UPDATE`)
+///   correctly serializes transactions to prevent "Lost Updates" or "Phantom Money".
+/// * **ACID Compliance:** Ensures all 50 parallel transactions are either fully committed
+///   or rolled back, maintaining a zero-loss state.
+/// * **Infrastructure Realism:** Uses **Testcontainers** to mirror production PostgreSQL
+///   sequence and locking behaviors, avoiding H2 inconsistencies.
+///
 @ActiveProfiles("test")
 @SpringBootTest(properties = {
         "spring.jpa.hibernate.ddl-auto=none"
 })
 @Testcontainers
-@Tag("stress") // Allows us to exclude this from fast builds if needed
+@Tag("stress")
 class LedgerStressTest {
 
+    /// **Production-Mirror Database Instance**.
+    ///
+    /// Orchestrates a native PostgreSQL 15 container. This ensures that the stress test
+    /// interacts with real MVCC (Multi-Version Concurrency Control) and row-level locking
+    /// mechanisms used in the production environment.
     @Container
     static final GenericContainer<?> postgres = new GenericContainer<>(DockerImageName.parse("postgres:15-alpine"))
             .withEnv("POSTGRES_DB", "opayque_test")
@@ -53,13 +73,20 @@ class LedgerStressTest {
             .withEnv("POSTGRES_PASSWORD", "ci_password")
             .withExposedPorts(5432);
 
-    // Redis container is needed if Service context loads RedisConfig,
-    // but here we might mock the Cache or use the embedded config from the Base Test.
-    // For safety in a "Stress" test, let's assume standard context loading.
+    /// **Ephemeral Cache Instance**.
+    ///
+    /// Spins up a Redis 7 container to support the standard application context, ensuring
+    /// that idempotency checks or blocklisting logic do not interfere with transaction throughput.
     @Container
     static final GenericContainer<?> redis = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
             .withExposedPorts(6379);
 
+    /// Configures dynamic properties to establish connectivity with the Testcontainers.
+    ///
+    /// **Technical Criticalities:**
+    /// * **Hikari Pool Size:** Set to 60 to prevent connection starvation during 50-thread bursts.
+    /// * **Dialect Force:** Explicitly overrides H2 settings to ensure PostgreSQL-specific
+    ///   locking syntax is utilized.
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", () -> "jdbc:postgresql://" + postgres.getHost() + ":" + postgres.getFirstMappedPort() + "/opayque_test");
@@ -67,23 +94,12 @@ class LedgerStressTest {
         registry.add("spring.datasource.password", () -> "ci_password");
         registry.add("spring.data.redis.host", redis::getHost);
         registry.add("spring.data.redis.port", redis::getFirstMappedPort);
-        // CRITICAL FIX: Override the H2 Driver from application-test.yaml
-        // Without this, the test tries to connect to Postgres using the H2 Driver!
         registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
-
-        // 2. THE SMOKING GUN FIX: Force PostgreSQL Dialect
-        // Without this, Hibernate was generating H2 SQL, which failed to lock the rows in Postgres.
         registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
         registry.add("spring.jpa.properties.hibernate.dialect", () -> "org.hibernate.dialect.PostgreSQLDialect");
-        // FIX: HIKARI POOL SIZE
-        // 50 Threads require at least 50 connections to strictly serialize without starving.
-        // We set it to 60 to have a buffer.
         registry.add("spring.datasource.hikari.maximum-pool-size", () -> "60");
         registry.add("spring.datasource.hikari.minimum-idle", () -> "10");
-        registry.add("spring.datasource.hikari.connection-timeout", () -> "30000"); // 30s
-
-        // FIX: DRIVER COMPATIBILITY
-        // Suppresses the "createClob() not implemented" warning which might be dirtying connections
+        registry.add("spring.datasource.hikari.connection-timeout", () -> "30000");
         registry.add("spring.jpa.properties.hibernate.jdbc.use_get_generated_keys", () -> "true");
         registry.add("spring.jpa.properties.hibernate.temp.use_jdbc_metadata_defaults", () -> "false");
     }
@@ -94,7 +110,6 @@ class LedgerStressTest {
     @Autowired
     private AccountRepository accountRepository;
 
-    // NEW: We need this to satisfy the Foreign Key constraint
     @Autowired
     private UserRepository userRepository;
 
@@ -104,44 +119,49 @@ class LedgerStressTest {
     @MockitoBean
     private CurrencyExchangeService exchangeService;
 
+    /// Purges all tables before each stress iteration to ensure sub-millisecond
+    /// sequence alignment and state isolation.
     @BeforeEach
     void setup() {
         ledgerRepository.deleteAll();
         accountRepository.deleteAll();
         userRepository.deleteAll();
 
-        // Mock Rates to avoid external calls during stress test
+        // Deterministic rates to eliminate external API latency as a factor in the stress test
         when(exchangeService.getRate(anyString(), anyString())).thenReturn(BigDecimal.ONE);
     }
 
+    /// **Scenario: Parallel Balance Aggregation**.
+    ///
+    /// Simulates 50 simultaneous $10.00 credits to a single USD account.
+    ///
+    /// **Audit Criteria:**
+    /// 1. **Zero Data Loss:** All 50 transactions must be persisted in the [LedgerEntry] log.
+    /// 2. **Balance Precision:** The final balance must equal exactly $500.00.
+    /// 3. **Blocking Efficiency:** Pessimistic locks must hold without causing deadlocks or timeouts.
+    ///
+    /// @throws InterruptedException If the thread pool or latch is interrupted.
     @Test
     @DisplayName("Concurrency: Should process 50 parallel transactions without data loss (Thundering Herd)")
     void shouldProcessConcurrentTransactionsWithoutDataLoss() throws InterruptedException {
 
-        // 1. Create a Parent User (Mandatory FK)
-        // FIX: Remove manual .id(UUID.randomUUID()) so @GeneratedValue can work correctly
+        // 1. Arrange: Persist parent user and account to satisfy Referential Integrity
         User stressUser = User.builder()
                 .email("stress.test@opayque.com")
                 .password("hashed-dummy-pw")
                 .fullName("Stress Tester")
                 .role(Role.CUSTOMER)
                 .build();
-        // FLUSH FIX: Ensures User is physically in DB before threads start
         stressUser = userRepository.saveAndFlush(stressUser);
 
-        // 2. Create the Account linked to the User
-        // FIX: Remove manual .id(UUID.randomUUID()) to stay consistent
         Account account = Account.builder()
-                .user(stressUser) // <--- THE FIX: Assign the User
+                .user(stressUser)
                 .currencyCode("USD")
                 .iban("US001234567890")
                 .build();
 
-        // FLUSH FIX: Ensures Account is physically in DB before threads start
         account = accountRepository.saveAndFlush(account);
         UUID accountId = account.getId();
-
-
 
         int threadCount = 50;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
@@ -149,14 +169,14 @@ class LedgerStressTest {
 
         List<Throwable> exceptions = Collections.synchronizedList(new ArrayList<>());
 
-        // Act: Fire 50 threads simultaneously
+        // 2. Act: Trigger the simultaneous flood of ledger requests
         UUID finalAccountId = accountId;
         for (int i = 0; i < threadCount; i++) {
             executor.submit(() -> {
                 try {
                     ledgerService.recordEntry(new CreateLedgerEntryRequest(
                             finalAccountId,
-                            BigDecimal.TEN, // $10.00
+                            BigDecimal.TEN,
                             "USD",
                             TransactionType.CREDIT,
                             "Stress Test",
@@ -171,48 +191,50 @@ class LedgerStressTest {
         }
 
         boolean completed = latch.await(10, TimeUnit.SECONDS);
-        assertThat(completed).as("Stress test timed out!").isTrue();
+        assertThat(completed).as("Stress test timed out! Possible deadlock in @Transactional logic.").isTrue();
 
-        // FIX: The "Hitchhiker" Sleep.
-        // Give the DB 1000ms to flush the 50th commit to the aggregate view.
-        // Without this, SELECT SUM() might run 1ms before the last row is visible.
-        // FIX: The "Stabilization Buffer" - Increased to 1000ms
-        // Ensures database MVCC snapshots are consistent before aggregation.
+        // 3. Stabilization: Buffer to ensure MVCC snapshots are flushed and consistent
         Thread.sleep(1000);
 
+        // 4. Verification: Audit the final state
         assertThat(exceptions).isEmpty();
 
-        // FIX: Verify Persistence First
         assertThat(ledgerRepository.count())
-                .as("Not all transactions were persisted!")
-                .isEqualTo(50);
-
+                .as("Atomic persistence failed: Not all 50 entries were saved!")
+                .isEqualTo(threadCount);
 
         BigDecimal balance = ledgerService.calculateBalance(accountId);
-        // FIX: Always use isEqualByComparingTo for BigDecimals to ignore scale differences
         assertThat(balance.stripTrailingZeros())
-                .as("Balance Mismatch")
+                .as("Dynamic Balance Aggregation mismatch!")
                 .isEqualByComparingTo(new BigDecimal("500").stripTrailingZeros());
     }
 
+    /// **Scenario: Mixed Currency Concurrency Stress**.
+    ///
+    /// Simulates a mixed load of USD and EUR transactions targeting a single EUR wallet.
+    /// This validates the interaction between `Pessimistic Locking` and the [CurrencyExchangeService].
+    ///
+    /// **Mathematical Invariant:**
+    /// * 25 EUR Transactions * 10 = 250 EUR
+    /// * 25 USD Transactions * 10 * 0.90 (Rate) = 225 EUR
+    /// * **Target Sum:** 475.00 EUR
+    ///
+    /// @throws InterruptedException If synchronization fails.
     @Test
     @DisplayName("Concurrency: Mixed Currency Load (Locking & Caching Check)")
     void shouldHandleMixedCurrencyConcurrency() throws InterruptedException {
 
-        // 1. Create a Parent User
-        //DONT PUT A FCKIN RANDOM UUID GENERATOR ON A DAMN ENTITY WHICH AUTO GENERATES IT!!!!!
+        // Arrange
         User mixedUser = User.builder()
-            .email("mixed.test@opayque.com")
-            .password("hashed-dummy-pw")
-            .fullName("Mixed Tester")
-            .role(Role.CUSTOMER)
-            .build();
+                .email("mixed.test@opayque.com")
+                .password("hashed-dummy-pw")
+                .fullName("Mixed Tester")
+                .role(Role.CUSTOMER)
+                .build();
         mixedUser = userRepository.saveAndFlush(mixedUser);
 
-        // 2. Create the Account linked to the User
-        //DONT PUT A FCKIN RANDOM UUID GENERATOR ON A DAMN ENTITY WHICH AUTO GENERATES IT!!!!!
         Account eurAccount = Account.builder()
-                .user(mixedUser) // <--- THE FIX
+                .user(mixedUser)
                 .currencyCode("EUR")
                 .iban("DE001234567890")
                 .build();
@@ -220,10 +242,9 @@ class LedgerStressTest {
         eurAccount = accountRepository.saveAndFlush(eurAccount);
         UUID accountId = eurAccount.getId();
 
-        // Mock Rate for USD -> EUR
-        when(exchangeService.getRate("USD", "EUR")).thenReturn(new BigDecimal("0.90")); // 1 USD = 0.90 EUR
+        when(exchangeService.getRate("USD", "EUR")).thenReturn(new BigDecimal("0.90"));
 
-        int threadCount = 50; // 25 USD, 25 EUR
+        int threadCount = 50;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         CountDownLatch latch = new CountDownLatch(threadCount);
         List<Throwable> exceptions = Collections.synchronizedList(new ArrayList<>());
@@ -235,7 +256,7 @@ class LedgerStressTest {
                 try {
                     ledgerService.recordEntry(new CreateLedgerEntryRequest(
                             accountId,
-                            BigDecimal.TEN, // 10.00
+                            BigDecimal.TEN,
                             isUsd ? "USD" : "EUR",
                             TransactionType.CREDIT,
                             "Mixed Stress",
@@ -249,35 +270,21 @@ class LedgerStressTest {
             });
         }
 
-        // Wait for all to finish
         boolean completed = latch.await(10, TimeUnit.SECONDS);
+        assertThat(completed).as("Mixed stress test timed out!").isTrue();
 
-        // CRITICAL FIX: Fail if timeout occurred
-        assertThat(completed)
-                .as("Stress test timed out! Possible Deadlock or Performance Regression.")
-                .isTrue();
-
-        // FIX: The "Hitchhiker" Sleep.
-        // Give the DB 200ms to flush the 50th commit to the aggregate view.
-        // Without this, SELECT SUM() might run 1ms before the last row is visible.
         Thread.sleep(1000);
 
         // Assert
         assertThat(exceptions).isEmpty();
 
-        // FIX: Verify Persistence First
         assertThat(ledgerRepository.count())
-                .as("Not all transactions were persisted!")
+                .as("Data Loss Detected in mixed currency stream!")
                 .isEqualTo(50);
 
-        // Math Check:
-        // 25 txns * 10 EUR = 250 EUR
-        // 25 txns * 10 USD * 0.90 Rate = 225 EUR
-        // Total = 475 EUR
         BigDecimal balance = ledgerService.calculateBalance(accountId);
-        // Use isEqualByComparingTo to be safe, but now our scales match!
         assertThat(balance.stripTrailingZeros())
-                .as("Balance Mismatch")
+                .as("Multi-currency balance aggregation mismatch!")
                 .isEqualByComparingTo(new BigDecimal("475").stripTrailingZeros());
     }
 }

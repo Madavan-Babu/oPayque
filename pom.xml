@@ -6,11 +6,11 @@
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
 		<version>3.5.10</version>
-		<relativePath/> <!-- lookup parent from repository -->
+		<relativePath/> <!-- lookup parent from the repository -->
 	</parent>
 	<groupId>com.opayque</groupId>
 	<artifactId>api</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
+	<version>1.8.0-SNAPSHOT</version>
 	<name>oPayque-API</name>
 	<description>oPayque Core Banking &amp; Digital Wallet API </description>
 	<url/>

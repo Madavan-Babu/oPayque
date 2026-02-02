@@ -157,12 +157,33 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
-    //Add docs here
+
+    /// Handles failures from external dependencies when a circuit breaker is OPEN or a service is down.
+    ///
+    /// This handler specifically intercepts [ServiceUnavailableException], which is typically thrown
+    /// when the exchangeRateCircuitBreaker transitions to an OPEN state or the
+    /// third-party ExchangeRate-API is unreachable.
+    ///
+    /// This aligns with the "Opaque" security principle by providing a consistent error structure
+    /// without leaking internal stack traces or implementation details of the underlying dependency.
+    ///
+    /// @param ex The exception indicating a failure in an external service integration.
+    /// @param request The current web request context for metadata extraction.
+    /// @return A [ResponseEntity] containing a standardized JSON [ErrorResponse] with a 503 status code.
     @ExceptionHandler(ServiceUnavailableException.class)
     public ResponseEntity<ErrorResponse> handleServiceUnavailable(ServiceUnavailableException ex, WebRequest request) {
+        // Log the dependency failure at ERROR level for CloudWatch monitoring and alerting
         log.error("Dependency Failure: {}", ex.getMessage());
-        return buildErrorResponse(HttpStatus.SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE", ex.getMessage(), request);
+
+        // Return standardized JSON response to the frontend for consistent UI error handling
+        return buildErrorResponse(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "SERVICE_UNAVAILABLE",
+                ex.getMessage(),
+                request
+        );
     }
+
 
     /// Fallback handler for unexpected internal server errors.
     ///
