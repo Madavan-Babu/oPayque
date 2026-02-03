@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -31,6 +32,15 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
     /// @param currencyCode The 3-character ISO 4217 currency code.
     /// @return true if an account already exists; false otherwise.
     boolean existsByUserIdAndCurrencyCode(UUID userId, String currencyCode);
+
+
+    /// Retrieves a list of all accounts associated with a specific user.
+    /// This method is used to fetch all multi-currency accounts linked to
+    /// a user, identified by their unique ID.
+    ///
+    /// @param userId The unique identifier of the user whose accounts are to be retrieved.
+    /// @return A list of `Account` entities belonging to the specified user.
+    List<Account> findAllByUserId(UUID userId);
 
     /// Retrieves a unique value from the primary account number sequence.
     ///

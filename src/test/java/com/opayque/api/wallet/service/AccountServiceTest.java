@@ -143,4 +143,44 @@ class AccountServiceTest {
 
         verify(accountRepository, never()).save(any());
     }
+
+    /// Scenario: Portfolio Retrieval Failure (User Not Found).
+    ///
+    /// Validates that the "Dashboard" fetch fails gracefully if the user identity
+    /// cannot be resolved from the provided email.
+    @Test
+    @DisplayName("GetAccounts: Should fail with 'User not found' when email does not exist")
+    void shouldFailWhenFetchingPortfolioForUnknownUser() {
+        // Arrange
+        String unknownEmail = "ghost@opayque.com";
+        when(userRepository.findByEmail(unknownEmail)).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThatThrownBy(() -> accountService.getAccountsForUser(unknownEmail))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("User not found");
+
+        // Verify we never attempted to fetch the portfolio since identity failed
+        verify(accountRepository, never()).findAllByUserId(any());
+    }
+
+    /// Scenario: Single Account Lookup Failure (ID Not Found).
+    ///
+    /// Ensures that retrieving a specific wallet by ID throws the correct exception
+    /// if the ID does not exist in the persistence layer.
+    @Test
+    @DisplayName("GetAccountById: Should fail with 'Account not found' when ID does not exist")
+    void shouldFailWhenFetchingUnknownAccountById() {
+        // Arrange
+        UUID unknownAccountId = UUID.randomUUID();
+        when(accountRepository.findById(unknownAccountId)).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThatThrownBy(() -> accountService.getAccountById(unknownAccountId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Account not found");
+
+        // Explicitly verifies the lookup attempt occurred
+        verify(accountRepository).findById(unknownAccountId);
+    }
 }

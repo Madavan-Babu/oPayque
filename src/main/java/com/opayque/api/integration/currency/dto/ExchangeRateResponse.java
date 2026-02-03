@@ -1,6 +1,8 @@
-package com.opayque.api.integration.currency;
+package com.opayque.api.integration.currency.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.opayque.api.integration.currency.CurrencyExchangeService;
+
 import java.math.BigDecimal;
 import java.util.Map;
 

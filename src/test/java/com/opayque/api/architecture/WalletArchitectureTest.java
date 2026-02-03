@@ -108,4 +108,17 @@ public class WalletArchitectureTest {
             .should().dependOnClassesThat().haveFullyQualifiedName("java.lang.Double")
             .orShould().dependOnClassesThat().haveFullyQualifiedName("java.lang.Float")
             .because("Financial integrity requires exact precision. Use BigDecimal or Joda-Money to prevent lost cents.");
+
+    /// Pillar 7: DTO Location Governance.
+    ///
+    /// Prevents "Inner Class Pollution" where Data Transfer Objects (DTOs) are
+    /// lazily defined inside Controllers or Services.
+    /// Strictly enforces that all API contracts (Requests, Responses, Summaries)
+    /// reside in the dedicated 'dto' package for reusability and documentation.
+    @ArchTest
+    static final ArchRule dtos_must_reside_in_dto_package = classes()
+            .that().haveSimpleNameEndingWith("Request")
+            .or().haveSimpleNameEndingWith("Response")
+            .or().haveSimpleNameEndingWith("Summary")
+            .should().resideInAPackage("..dto..");
 }

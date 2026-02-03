@@ -40,5 +40,6 @@
     <include file="db/changelog/changes/006-alter-ledger-add-exchange-metadata.xml" relativeToChangelogFile="false"/>
     <include file="db/changelog/changes/007-add-missing-ledger-columns.xml" relativeToChangelogFile="false"/>
     <include file="db/changelog/changes/008-add-description.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/changes/009-add-covering-index.xml" relativeToChangelogFile="false"/>
 
 </databaseChangeLog>

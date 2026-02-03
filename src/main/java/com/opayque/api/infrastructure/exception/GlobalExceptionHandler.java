@@ -1,5 +1,6 @@
 package com.opayque.api.infrastructure.exception;
 
+import com.opayque.api.infrastructure.dto.ErrorResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;

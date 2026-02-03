@@ -10,21 +10,54 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
-/// Persistent entity representing an immutable record in the digital ledger.
-///
-/// This class is the core of the **oPayque** "Magic Ledger". It implements an append-only
-/// data pattern where records are never modified once committed, ensuring a tamper-evident
-/// audit trail for all financial movements.
-///
-/// **Architectural Specifications:**
-/// - **Persistence Strategy:** Mapped to the `ledger_entries` table which utilizes **PostgreSQL Range
-///   Partitioning** (e.g., `ledger_entries_2026`) for high-volume scalability.
-/// - **Immutability:** Decorated with Hibernate's `@Immutable` to disable dirty-checking,
-///   reducing CPU overhead during transaction commits.
-/// - **Story 2.3 Implementation:** Contains extended metadata for cross-currency transfers,
-///   capturing the "Financial Truth" of conversions at the exact moment of execution.
+/// Represents a single entry in the financial ledger for an account.
+/// This entity is immutable and serves as the core persistence model for
+/// tracking account transactions in the system. Each ledger entry impacts
+/// the balance of its associated account and is recorded with metadata
+/// for auditing and reconciliation purposes.
+/// Annotations:
+/// - `@Entity`: Specifies that the class is a JPA entity.
+/// - `@Table`: Maps this entity to the database table "ledger_entries".
+/// - `@Immutable`: Indicates that the entity is read-only and should not
+///   be modified after creation.
+/// - Indexes:
+///   - `idx_ledger_covering`: A covering index for the columns
+///     "account_id", "transaction_type", and "amount". This index is optimized
+///     for aggregation queries.
+///   - `idx_ledger_recorded_at`: Index on the "recorded_at" column,
+///     used for time-based partitions or queries.
+/// Fields:
+/// - `id`: Unique identifier for the ledger entry, generated as a UUID.
+/// - `account`: The account associated with the entry. Established as a
+///   many-to-one relationship with Lazy loading, to optimize bulk fetches.
+/// - `amount`: Normalized amount affecting the account balance, expressed
+///   in the account's base currency. Uses high precision for financial calculations.
+/// - `currency`: ISO 4217 currency code corresponding to the amount field.
+/// - `direction`: Indicates the flow of funds (e.g., CREDIT or DEBIT).
+/// - `originalAmount`: The pre-conversion amount requested.
+/// - `originalCurrency`: The currency of the originalAmount prior to conversion.
+/// - `exchangeRate`: The conversion rate applied to the originalAmount.
+/// - `transactionType`: Categorization of the transaction (e.g., TRANSFER, DEPOSIT).
+/// - `description`: Contextual information for the ledger entry, useful for
+///   auditing or user-facing purposes.
+/// - `recordedAt`: The timestamp marking when the ledger entry was created.
+///   Functions as a partitioning key for the database table.
+/// Methods:
+/// - `equals()`: Implements JPA-compliant equality based strictly on the
+///   primary key (UUID). Supports comparison of entities and Hibernate proxies.
+/// - `hashCode()`: Generates a hash code based on the primary key and
+///   the entity class.
 @Entity
-@Table(name = "ledger_entries")
+@Table(
+        name = "ledger_entries",
+        indexes = {
+                // CHANGED TO COVERING INDEX
+                // Includes 'transaction_type' and 'amount' so the aggregation query
+                // can run purely in the Index (Index-Only Scan), bypassing the Heap.
+                @Index(name = "idx_ledger_covering", columnList = "account_id, transaction_type, amount"),
+                @Index(name = "idx_ledger_recorded_at", columnList = "recorded_at")
+        }
+)
 @Immutable
 @Getter
 @Setter
@@ -104,6 +137,15 @@ public class LedgerEntry {
         return getId() != null && Objects.equals(getId(), that.getId());
     }
 
+    /**
+     * Computes the hash code for the current object. This implementation ensures compatibility
+     * with Hibernate Lazy Loading and Proxy objects. When the current object (`this`)
+     * is a Hibernate proxy, the hash code is derived from the persistent class. Otherwise,
+     * it is derived from the actual class of the object.
+     *
+     * @return an integer representing the hash code based on the persistent class if
+     *         the object is a Hibernate proxy, or the object's class otherwise.
+     */
     @Override
     public final int hashCode() {
         return this instanceof HibernateProxy ? ((HibernateProxy) this).getHibernateLazyInitializer().getPersistentClass().hashCode() : getClass().hashCode();

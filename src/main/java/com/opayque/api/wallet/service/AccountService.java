@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.UUID;
 
 /// Multi-Currency Account Management - Wallet Provisioning Service.
@@ -116,5 +117,52 @@ public class AccountService {
                 iban.substring(iban.length() - 4));
 
         return savedAccount;
+    }
+
+    /// Retrieves all active wallets for a specific user.
+    ///
+    /// This method serves the "Dashboard" view. It resolves the user's identity
+    /// via their email (from the Security Context) and then fetches the complete
+    /// list of their multi-currency accounts.
+    ///
+    /// @param userEmail The verified email address from the JWT.
+    /// @return A list of [Account] entities owned by the user.
+    /// @throws IllegalArgumentException If the user identity cannot be found.
+    @Transactional(readOnly = true)
+    public List<Account> getAccountsForUser(String userEmail) {
+        log.debug("Fetching account portfolio for user: [{}]", userEmail);
+
+        // 1. Resolve Identity (Ensures we don't return empty lists for non-existent users)
+        User owner = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> {
+                    log.error("Portfolio fetch failed. User Email [{}] not found.", userEmail);
+                    return new IllegalArgumentException("User not found");
+                });
+
+        // 2. Fetch Portfolio
+        List<Account> portfolio = accountRepository.findAllByUserId(owner.getId());
+
+        log.debug("Found [{}] wallets for user [{}]", portfolio.size(), owner.getId());
+        return portfolio;
+    }
+
+
+
+    /// Retrieves an [Account] by its unique identifier.
+    /// This method fetches an account instance based on the provided UUID. If no account
+    /// is found, an [IllegalArgumentException] is thrown to indicate the absence of
+    /// the requested account.
+    ///
+    /// @param accountId The unique identifier of the account to retrieve.
+    /// @return The [Account] entity corresponding to the given identifier.
+    /// @throws IllegalArgumentException If the account with the specified ID is not found.
+    @Transactional(readOnly = true)
+    public Account getAccountById(UUID accountId) {
+        return accountRepository.findById(accountId)
+                .orElseThrow(() -> {
+                    log.error("Account lookup failed. ID [{}] not found.", accountId);
+                    // This maps to 404 Not Found in the Global Exception Handler
+                    return new IllegalArgumentException("Account not found");
+                });
     }
 }

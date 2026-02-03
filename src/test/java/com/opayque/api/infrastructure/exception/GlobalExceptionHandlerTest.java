@@ -1,5 +1,6 @@
 package com.opayque.api.infrastructure.exception;
 
+import com.opayque.api.infrastructure.dto.ErrorResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

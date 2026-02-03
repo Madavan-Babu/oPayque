@@ -1,6 +1,7 @@
 package com.opayque.api.integration.currency;
 
 import com.opayque.api.infrastructure.exception.ServiceUnavailableException;
+import com.opayque.api.integration.currency.dto.ExchangeRateResponse;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
