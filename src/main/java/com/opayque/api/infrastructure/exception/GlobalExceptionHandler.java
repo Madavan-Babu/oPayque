@@ -1,5 +1,6 @@
 package com.opayque.api.infrastructure.exception;
 
+import com.opayque.api.infrastructure.dto.ErrorResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -37,6 +38,8 @@ public class GlobalExceptionHandler {
         log.debug("Conflict detected: Registration attempt with existing email. Reason: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
+
+
 
     /// Handles Bean Validation failures triggered by the `@Valid` annotation on incoming DTO payloads.
     ///
@@ -132,6 +135,56 @@ public class GlobalExceptionHandler {
 
         return buildErrorResponse(HttpStatus.NOT_FOUND, "Resource not found", request);
     }
+
+    /// Handles domain validation errors (e.g., Unsupported Territories like "INR").
+    ///
+    /// @param ex The {@link IllegalArgumentException} thrown by domain services.
+    /// @param request The web request context.
+    /// @return A 400 Bad Request response with a standardized {@link ErrorResponse}.
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex, WebRequest request) {
+        log.warn("Domain Validation Error: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
+    }
+
+    /// Handles business state violations (e.g., "Wallet already exists" 1:1 rule).
+    ///
+    /// @param ex The {@link IllegalStateException} thrown when a state invariant is breached.
+    /// @param request The web request context.
+    /// @return A 409 Conflict response with a standardized {@link ErrorResponse}.
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalState(IllegalStateException ex, WebRequest request) {
+        log.warn("Business Logic Violation: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
+    }
+
+
+    /// Handles failures from external dependencies when a circuit breaker is OPEN or a service is down.
+    ///
+    /// This handler specifically intercepts [ServiceUnavailableException], which is typically thrown
+    /// when the exchangeRateCircuitBreaker transitions to an OPEN state or the
+    /// third-party ExchangeRate-API is unreachable.
+    ///
+    /// This aligns with the "Opaque" security principle by providing a consistent error structure
+    /// without leaking internal stack traces or implementation details of the underlying dependency.
+    ///
+    /// @param ex The exception indicating a failure in an external service integration.
+    /// @param request The current web request context for metadata extraction.
+    /// @return A [ResponseEntity] containing a standardized JSON [ErrorResponse] with a 503 status code.
+    @ExceptionHandler(ServiceUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleServiceUnavailable(ServiceUnavailableException ex, WebRequest request) {
+        // Log the dependency failure at ERROR level for CloudWatch monitoring and alerting
+        log.error("Dependency Failure: {}", ex.getMessage());
+
+        // Return standardized JSON response to the frontend for consistent UI error handling
+        return buildErrorResponse(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "SERVICE_UNAVAILABLE",
+                ex.getMessage(),
+                request
+        );
+    }
+
 
     /// Fallback handler for unexpected internal server errors.
     ///

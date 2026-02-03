@@ -1,4 +1,4 @@
-package com.opayque.api.infrastructure.exception;
+package com.opayque.api.infrastructure.dto;
 
 import java.time.LocalDateTime;
 

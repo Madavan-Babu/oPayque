@@ -6,23 +6,25 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
     <changeSet id="20260128-002-create-refresh-tokens" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="refresh_tokens"/>
+            </not>
+        </preConditions>
+
         <createTable tableName="refresh_tokens">
             <column name="id" type="UUID">
                 <constraints primaryKey="true" nullable="false"/>
             </column>
-
             <column name="token" type="VARCHAR(255)">
                 <constraints unique="true" nullable="false"/>
             </column>
-
             <column name="expiry_date" type="TIMESTAMP">
                 <constraints nullable="false"/>
             </column>
-
             <column name="revoked" type="BOOLEAN" defaultValueBoolean="false">
                 <constraints nullable="false"/>
             </column>
-
             <column name="user_id" type="UUID">
                 <constraints nullable="false"
                              unique="true"

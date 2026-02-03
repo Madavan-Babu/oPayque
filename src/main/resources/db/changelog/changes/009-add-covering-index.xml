@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260203-001-add-covering-index" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="ledger_entries"/>
+            <not>
+                <indexExists indexName="idx_ledger_covering" tableName="ledger_entries"/>
+            </not>
+        </preConditions>
+
+        <comment>Story 2.4: Performance Optimization. Adds covering index for fast Balance Aggregation.</comment>
+
+        <createIndex tableName="ledger_entries" indexName="idx_ledger_covering">
+            <column name="account_id"/>
+            <column name="transaction_type"/>
+            <column name="amount"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

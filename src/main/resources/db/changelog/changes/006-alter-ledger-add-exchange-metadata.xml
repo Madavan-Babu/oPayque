@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260131-001-add-exchange-metadata" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="ledger_entries" columnName="original_currency"/>
+            </not>
+        </preConditions>
+
+        <addColumn tableName="ledger_entries">
+            <column name="original_currency" type="VARCHAR(3)">
+                <constraints nullable="true"/>
+            </column>
+            <column name="exchange_rate" type="DECIMAL(19, 6)">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <sql>
+            UPDATE ledger_entries SET original_currency = 'EUR', exchange_rate = 1.000000 WHERE original_currency IS NULL;
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

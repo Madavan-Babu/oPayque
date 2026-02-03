@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260130-001-add-iban-to-accounts" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="accounts" columnName="iban"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="accounts">
+            <column name="iban" type="VARCHAR(34)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

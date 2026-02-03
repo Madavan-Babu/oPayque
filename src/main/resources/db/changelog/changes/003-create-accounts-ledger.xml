@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260129-001-create-accounts-table" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="accounts"/>
+            </not>
+        </preConditions>
+        <createTable tableName="accounts">
+            <column name="id" type="UUID">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="user_id" type="UUID">
+                <constraints nullable="false" foreignKeyName="fk_accounts_user" references="users(id)"/>
+            </column>
+            <column name="currency" type="VARCHAR(3)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+        <addUniqueConstraint tableName="accounts" columnNames="user_id, currency" constraintName="uq_accounts_user_currency"/>
+    </changeSet>
+
+    <changeSet id="20260129-002-create-ledger-entries-partitioned-pg" author="madavan" dbms="postgresql">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="ledger_entries"/>
+            </not>
+        </preConditions>
+        <sql>
+            CREATE TABLE ledger_entries (
+            id UUID NOT NULL,
+            account_id UUID NOT NULL,
+            amount DECIMAL(19, 4) NOT NULL,
+            direction VARCHAR(10) NOT NULL,
+            transaction_type VARCHAR(20) NOT NULL,
+            recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id, recorded_at),
+            CONSTRAINT fk_ledger_accounts FOREIGN KEY (account_id) REFERENCES accounts(id)
+            ) PARTITION BY RANGE (recorded_at);
+        </sql>
+    </changeSet>
+
+    <changeSet id="20260129-003-create-ledger-partitions-pg" author="madavan" dbms="postgresql">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="ledger_entries_default"/>
+            </not>
+        </preConditions>
+        <sql>
+            CREATE TABLE ledger_entries_default PARTITION OF ledger_entries DEFAULT;
+
+            CREATE TABLE ledger_entries_2026 PARTITION OF ledger_entries
+            FOR VALUES FROM ('2026-01-01 00:00:00') TO ('2027-01-01 00:00:00');
+        </sql>
+    </changeSet>
+
+    <changeSet id="20260129-002-create-ledger-entries-standard-h2" author="madavan" dbms="h2">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="ledger_entries"/>
+            </not>
+        </preConditions>
+        <createTable tableName="ledger_entries">
+            <column name="id" type="UUID">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="account_id" type="UUID">
+                <constraints nullable="false" foreignKeyName="fk_ledger_accounts" references="accounts(id)"/>
+            </column>
+            <column name="amount" type="DECIMAL(19, 4)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="direction" type="VARCHAR(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="transaction_type" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="recorded_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="20260129-004-create-ledger-indices" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_ledger_account_date"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="ledger_entries" indexName="idx_ledger_account_date">
+            <column name="account_id"/>
+            <column name="recorded_at"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

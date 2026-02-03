@@ -1,5 +1,6 @@
 package com.opayque.api.infrastructure.exception;
 
+import com.opayque.api.infrastructure.dto.ErrorResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -101,5 +102,42 @@ class GlobalExceptionHandlerTest {
         ErrorResponse body = response.getBody();
         assertNotNull(body);
         assertEquals("Access Denied: You do not have permission to view this resource", body.message());
+    }
+
+    /// Validates that domain validation errors (e.g., "User not found") are correctly
+    /// mapped to a 400 Bad Request status.
+    @Test
+    @DisplayName("Unit: Should handle IllegalArgumentException and return 400")
+    void shouldHandleIllegalArgumentException() {
+        IllegalArgumentException ex = new IllegalArgumentException("Invalid argument provided");
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleIllegalArgument(ex, webRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        ErrorResponse body = response.getBody();
+        assertNotNull(body);
+        assertEquals("BAD_REQUEST", body.code());
+        assertEquals("Invalid argument provided", body.message());
+    }
+
+    /// Validates that dependency failures (e.g., Currency Exchange offline) are
+    /// correctly mapped to a 503 Service Unavailable status.
+    @Test
+    @DisplayName("Unit: Should handle ServiceUnavailableException and return 503")
+    void shouldHandleServiceUnavailableException() {
+        // Arrange
+        ServiceUnavailableException ex = new ServiceUnavailableException("External Currency Provider Unavailable");
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleServiceUnavailable(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+
+        ErrorResponse body = response.getBody();
+        assertNotNull(body);
+        assertEquals("SERVICE_UNAVAILABLE", body.code());
+        assertEquals("External Currency Provider Unavailable", body.message());
+        // Verify path metadata is preserved
+        assertEquals("/test/path", body.path());
     }
 }
