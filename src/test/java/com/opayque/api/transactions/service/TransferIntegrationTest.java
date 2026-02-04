@@ -29,11 +29,30 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/// **Epic 3: Atomic Transaction Engine — Full-Slice Integration Audit**.
+///
+/// This suite validates the orchestration of fund movements across the [TransferService],
+/// [LedgerRepository], and [AccountRepository]. It ensures that the "Magic Ledger"
+/// maintains strict `ACID` properties during real-world database interactions.
+///
+/// **Architectural Objectives:**
+/// - **Atomicity Verification:** Confirms that debits and credits are treated as a single
+///   indivisible unit of work.
+/// - **Referential Integrity:** Validates that shared business identifiers (Reference IDs)
+///   link related entries for reconciliation.
+/// - **Infrastructure Parity:** Uses `Testcontainers` to mirror production `PostgreSQL`
+///   and `Redis` configurations, bypassing H2 limitations.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 class TransferIntegrationTest {
 
     // --- INFRASTRUCTURE (Postgres + Redis) ---
+
+    /// **Ephemeral Persistence Layer (PostgreSQL 15)**.
+    ///
+    /// Provisions a containerized database instance to test native row-level locking
+    /// and `DECIMAL(19, 4)` precision. Essential for verifying the `PESSIMISTIC_WRITE`
+    /// strategy defined in the [AccountRepository].
     @Container
     static final GenericContainer<?> postgres = new GenericContainer<>(DockerImageName.parse("postgres:15-alpine"))
             .withEnv("POSTGRES_DB", "opayque_test")
@@ -41,10 +60,23 @@ class TransferIntegrationTest {
             .withEnv("POSTGRES_PASSWORD", "ci_password")
             .withExposedPorts(5432);
 
+    /// **Ephemeral Cache Layer (Redis 7)**.
+    ///
+    /// Supports the application context for cross-cutting security and idempotency
+    /// requirements. Although not directly tested in this slice, it ensures the
+    /// `Spring Boot` context initializes correctly.
     @Container
     static final GenericContainer<?> redis = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
             .withExposedPorts(6379);
 
+    /// **Infrastructure Orchestration & Pool Tuning**.
+    ///
+    /// Dynamically maps container credentials to the `Spring` environment.
+    ///
+    /// **Critical Overrides:**
+    /// - **Dialect Force:** Reinstates `PostgreSQLDialect` to ensure correct `SQL` generation.
+    /// - **HikariCP Tuning:** Configures `maximum-pool-size` to 60 to prevent connection
+    ///   starvation during transactional bursts.
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", () -> "jdbc:postgresql://" + postgres.getHost() + ":" + postgres.getFirstMappedPort() + "/opayque_test");
@@ -74,6 +106,15 @@ class TransferIntegrationTest {
         userRepository.deleteAll();
     }
 
+    /// **Requirement Audit: Transactional Atomicity & Linking**.
+    ///
+    /// Verifies that a successful transfer generates two [LedgerEntry] records (one `DEBIT`,
+    /// one `CREDIT`) sharing a unique, non-null `referenceId`.
+    ///
+    /// **Verification Criteria:**
+    /// - `ReferenceId` parity between sender and receiver logs.
+    /// - Directional markers (`IN`/`OUT`) align with the [TransactionType].
+    /// - Logical amounts match the requested transfer value.
     @Test
     @DisplayName("Should persist atomic transfer with linked Reference ID in Real DB")
     void shouldPersistTransferAtomicallyWithReferenceId() {
@@ -112,6 +153,10 @@ class TransferIntegrationTest {
         assertThat(creditEntry.getDirection()).isEqualTo("IN");
     }
 
+    /// **Mathematical Audit: Dynamic Balance Aggregation**.
+    ///
+    /// Validates that the [LedgerRepository] aggregate query reflects the post-transfer
+    /// state correctly. Ensures that `100.00 (Start) - 40.00 (Transfer) = 60.00 (Balance)`.
     @Test
     @DisplayName("Should update real balances correctly after transfer")
     void shouldUpdateBalancesCorrectly() {
@@ -135,6 +180,13 @@ class TransferIntegrationTest {
         assertThat(receiverBalance).isEqualByComparingTo("40.00");
     }
 
+    /// **Resilience Audit: Automated Rollback on Business Failure**.
+    ///
+    /// Forces an [InsufficientFundsException] and confirms that the database session
+    /// rolls back the entire transaction.
+    ///
+    /// **Success Condition:** The sender's ledger must contain only the initial `Seed Funds`
+    /// record; no `DEBIT` entry should exist in the physical database.
     @Test
     @DisplayName("Should remain atomic (Rollback) on Insufficient Funds")
     void shouldRollbackOnInsufficientFunds() {
@@ -180,6 +232,11 @@ class TransferIntegrationTest {
                 .build());
     }
 
+    /// **Atomic Initial Credit Injection**.
+    ///
+    /// Directly persists a `CREDIT` entry into the database to establish baseline liquidity.
+    /// This helper uses `saveAndFlush` to ensure that the data is visible to the
+    /// [TransferService] transaction boundary.
     private void seedFunds(Account account, BigDecimal amount) {
         // FIX: saveAndFlush
         ledgerRepository.saveAndFlush(LedgerEntry.builder()

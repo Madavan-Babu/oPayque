@@ -1,5 +1,6 @@
 package com.opayque.api.transactions.service;
 
+import com.opayque.api.infrastructure.exception.InsufficientFundsException;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
 import com.opayque.api.wallet.entity.Account;
@@ -21,20 +22,32 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-/// Epic 3: Atomic Transaction Engine - Property-Based Testing.
+
+/// **Epic 3: Atomic Transaction Engine — Property-Based Formal Verification**.
 ///
-/// Unlike Unit Tests which check "10 + 10 = 20", these tests prove "Invariants".
-/// Invariant Tested: "Atomic Consistency"
-/// - For ANY random valid amount and ANY random users:
-///   1. The Debit and Credit MUST share the exact same Reference ID.
-///   2. The Debit Amount MUST equal the Credit Amount.
-///   3. The Transaction Types MUST be opposite.
+/// Unlike standard unit tests that validate discrete examples, this suite utilizes
+/// **jqwik** to prove "Financial Invariants" across thousands of randomized inputs.
+/// It treats the [TransferService] as a black-box state machine, asserting that
+/// specific mathematical truths hold regardless of the scale or origin of the funds.
+///
+/// **Verified Invariants:**
+/// - **Symmetric Atomicity:** Every successful transfer must generate a perfectly
+///   balanced Debit/Credit pair sharing a single `referenceId`.
+/// - **Value Conservation:** System total liquidity must remain constant; the amount
+///   debited must bit-for-bit match the amount credited.
+/// - **Narcissism Block:** Self-transfers are architecturally rejected to prevent
+///   ledger bloat and circular reference complexity.
 class TransferPropertyTest {
 
     private AccountService accountService;
     private LedgerService ledgerService;
     private TransferService transferService;
 
+    /// Orchestrates a clean mock environment for every individual property "try".
+    ///
+    /// By using `@BeforeTry`, the service and its dependencies are re-instantiated
+    /// for every randomized input set, ensuring zero state leakage and maintaining
+    /// the purity of the stochastic simulation.
     @BeforeTry
     void setUp() {
         accountService = Mockito.mock(AccountService.class);
@@ -42,6 +55,19 @@ class TransferPropertyTest {
         transferService = new TransferService(accountService, ledgerService);
     }
 
+    /// **Invariant: Symmetric Atomicity & Reference Linking**.
+    ///
+    /// Proves that for any valid financial amount and any pair of distinct users,
+    /// the resulting ledger entries are mirror images of each other.
+    ///
+    /// **Formal Verification Criteria:**
+    /// 1. **Reference Parity:** Both records MUST share the same UUID `referenceId`.
+    /// 2. **Amount Equality:** `debit.amount == credit.amount == requested.amount`.
+    /// 3. **Polarity Check:** Types MUST be exactly one `DEBIT` and one `CREDIT`.
+    ///
+    /// **Complexity Analysis:** O(N) where N is the number of jqwik tries (default: 100).
+    /// This test effectively explores 100 random regions of the 128-bit UUID and
+    /// [BigDecimal] decimal space.
     @Property(tries = 100)
     void transferRequestsMustAlwaysBeSymmetric(
             @ForAll("validAmounts") BigDecimal amount,
@@ -81,9 +107,15 @@ class TransferPropertyTest {
                 .containsExactlyInAnyOrder(TransactionType.DEBIT, TransactionType.CREDIT);
     }
 
-    /// INVARIANT 2: The "Zero/Negative Wall"
-    /// Proves that for ANY non-positive number (infinite set of negatives),
-    /// the transfer is REJECTED and NO calls are made to the Ledger.
+
+    /// **Invariant: The "Zero/Negative Wall" Security Gate**.
+    ///
+    /// Proves that the [TransferService] acts as a non-permeable barrier for invalid
+    /// financial values. This test asserts that for the entire set of non-positive
+    /// [BigDecimal] values (0 and negatives), the engine rejects the request
+    /// **before** touching the persistence layer.
+    ///
+    /// **Security Assertion:** Verified that zero calls are dispatched to [LedgerService].
     @Property
     void transferRequestsWithInvalidAmountsMustBeRejected(
             @ForAll("invalidAmounts") BigDecimal amount,
@@ -106,9 +138,11 @@ class TransferPropertyTest {
         verify(ledgerService, Mockito.never()).recordEntry(any());
     }
 
-    /// INVARIANT 3: The "Narcissism Block"
-    /// Proves that for ANY user (random UUID), trying to send money to themselves
-    /// is ALWAYS rejected, regardless of the amount.
+    /// **Invariant: The "Narcissism Block" (Circular Prevention)**.
+    ///
+    /// Asserts that a user cannot initiate a transfer to an account they already own.
+    /// This prevents the creation of "Infinite Loops" in reconciliation reports and
+    /// protects the ledger from redundant, zero-sum record bloat.
     @Property
     void selfTransferMustAlwaysBeRejected(
             @ForAll("validIds") UUID userId,
@@ -138,6 +172,11 @@ class TransferPropertyTest {
     }
 
     // --- GENERATORS (The "Chaos" Engine) ---
+
+    /// **Chaos Engine: Non-Positive Value Generator**.
+    ///
+    /// Produces a distribution of negative [BigDecimal] values and the absolute zero
+    /// boundary to test the resilience of the service-layer validation gates.
     @Provide
     Arbitrary<BigDecimal> invalidAmounts() {
         // Generates negatives and zero
@@ -147,7 +186,10 @@ class TransferPropertyTest {
         );
     }
 
-
+    /// **Chaos Engine: Non-Positive Value Generator**.
+    ///
+    /// Produces a distribution of negative [BigDecimal] values and the absolute zero
+    /// boundary to test the resilience of the service-layer validation gates.
     @Provide
     Arbitrary<BigDecimal> validAmounts() {
         // Generates amounts from 0.01 to 1 Billion, with up to 2 decimal places
@@ -156,7 +198,10 @@ class TransferPropertyTest {
                 .ofScale(2);
     }
 
-
+    /// **Chaos Engine: Entity Identity Generator**.
+    ///
+    /// Produces high-entropy [UUID] values to simulate a high-cardinality user base,
+    /// ensuring the transfer logic is not sensitive to specific primary key patterns.
     @Provide
     Arbitrary<UUID> validIds() {
         // Fix: Use a lambda that accepts the 'random' argument, even if we ignore it.
@@ -166,6 +211,12 @@ class TransferPropertyTest {
 
     // --- HELPER ---
 
+    /// **Stochastic Helper: Provisioning Virtual State**.
+    ///
+    /// Configures the [AccountService] and [LedgerService] mocks to simulate
+    /// a valid, liquid state for the randomized identities generated by jqwik.
+    /// Ensures the "Sender" always has `amount + 10` available to isolate the
+    /// core transfer logic from [InsufficientFundsException] noise.
     private void mockHappyPath(UUID senderId, UUID receiverId, String receiverEmail, BigDecimal amount) {
         // Sender Setup
         User senderUser = User.builder().id(senderId).email("sender@opayque.com").build();

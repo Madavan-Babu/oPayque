@@ -22,8 +22,14 @@ import java.util.UUID;
 @Repository
 public interface LedgerRepository extends JpaRepository<LedgerEntry, UUID> {
 
-    // --- NEW METHOD (Required for Story 3.1 Integration Test) ---
-    // Allows us to fetch the history of an account to verify atomic transfers.
+    /// Retrieves a list of ledger entries associated with the specified account.
+    /// This method provides the transaction history for an account, which can be used
+    /// to verify atomic transfers and analyze account activity.
+    ///
+    /// @param account The account for which the ledger entries are to be retrieved.
+    ///                Must be a valid non-null Account object.
+    /// @return A list of `LedgerEntry` objects associated with the specified account.
+    ///         The returned list may be empty if no transactions are found for the account.
     List<LedgerEntry> findByAccount(Account account);
 
     /// Calculates the current available balance for a specific account using a zero-sum aggregation.

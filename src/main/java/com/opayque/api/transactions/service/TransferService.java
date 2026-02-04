@@ -3,6 +3,7 @@ package com.opayque.api.transactions.service;
 import com.opayque.api.infrastructure.exception.InsufficientFundsException;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
 import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.repository.AccountRepository;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.service.AccountService;
 import com.opayque.api.wallet.service.LedgerService;
@@ -15,10 +16,19 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
-/// Epic 3: Atomic Transaction Engine.
+/// **Epic 3: Atomic Transaction Engine — High-Precision Fund Orchestrator**.
 ///
-/// Coordinate high-level financial movements between users.
-/// strictly enforcing ACID compliance and preventing double-spending via proper orchestration.
+/// This service coordinates complex, multi-stage financial movements between user wallets.
+/// It acts as the primary enforcement layer for the project's **"Reliability-First"** mandate,
+/// ensuring that money is never created or destroyed during a transfer, only moved.
+///
+/// **Architectural Constraints:**
+/// - **Atomicity:** Decorated with [@Transactional] to ensure that the "Debit" and "Credit"
+///   phases are committed as a single, indivisible unit of work.
+/// - **Pessimistic Locking:** Inherits locking behavior from the [AccountRepository]
+///   invoked via the [AccountService] to prevent "Lost Updates" in high-concurrency scenarios.
+/// - **Auditability:** Generates a shared `transferId` (Reference ID) to link opposing
+///   ledger entries for future reconciliation.
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -28,15 +38,35 @@ public class TransferService {
     private final AccountService accountService;
     private final LedgerService ledgerService;
 
-    /// Executes a P2P transfer between two users.
+    /// **Operational Unit: Atomic P2P Fund Movement**.
     ///
-    /// This method wraps two distinct ledger entries (Debit + Credit) into a single
-    /// atomic database transaction. If the Credit fails, the Debit rolls back.
+    /// Executes a peer-to-peer transfer by orchestrating a zero-sum movement between two
+    /// independent ledger partitions.
     ///
-    /// @param senderId The UUID of the sender's wallet.
-    /// @param receiverEmail The verified email of the recipient.
-    /// @param amountStr The amount to transfer (String to ensure BigDecimal precision).
-    /// @param currency The ISO 4217 currency code (currently strictly enforces match).
+    /// **Execution Pipeline:**
+    /// 1. **Validation Gate:** Rejects non-positive amounts to prevent "Negative Spend" attacks.
+    /// 2. **Resolution:** Locates the sender's wallet and finds a compatible currency wallet
+    ///    for the recipient.
+    /// 3. **Integrity Audit:** Verifies that neither account is orphaned (missing user identity)
+    ///    and blocks "Narcissistic Transfers" (self-spending).
+    /// 4. **Liquidity Check:** Performs a dynamic balance aggregation to verify sufficient funds
+    ///    before initiating any write operations.
+    /// 5. **Atomic Commit:** Dispatches symmetric `TransactionType.DEBIT` and `TransactionType.CREDIT`
+    ///    requests to the [LedgerService].
+    ///
+    /// **Precision Mandate:**
+    /// Utilizes [BigDecimal] for the `amount` parameter to maintain sub-cent precision,
+    /// satisfying the project's requirements for financial mathematical safety.
+    ///
+    /// @param senderId The unique [UUID] of the source account.
+    /// @param receiverEmail The verified email address of the target identity.
+    /// @param amountStr The transfer value as a string to prevent IEEE 754 floating-point errors
+    ///                  during deserialization.
+    /// @param currency The ISO 4217 currency code identifying the transaction medium.
+    ///
+    /// @throws InsufficientFundsException If the sender's balance is lower than the requested amount.
+    /// @throws IllegalArgumentException If the amount is $< 0$ or if the receiver has no compatible wallet.
+    /// @throws IllegalStateException If a data integrity violation is detected (Orphaned Account).
     public void transferFunds(UUID senderId, String receiverEmail, String amountStr, String currency) {
         BigDecimal amount = new BigDecimal(amountStr);
         log.info("Initiating Transfer: Sender={} -> Receiver={} | Amt={} {}", senderId, receiverEmail, amount, currency);
@@ -102,6 +132,8 @@ public class TransferService {
                 null,       // Timestamp (ignored)
                 transferId  // <--- The Link
         );
+        // The Atomic Pulse: Debit and Credit are created with the SAME transferId.
+        // If creditRequest fails, Spring's Proxy will trigger a DB Rollback for debitRequest.
         ledgerService.recordEntry(creditRequest);
 
         log.info("Transfer Complete: ID={}", transferId);

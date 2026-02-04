@@ -32,12 +32,21 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/// Epic 3: Atomic Transaction Engine - Vulnerability Check.
+
+/// **Epic 3: Atomic Transaction Engine — Double-Spend Vulnerability Audit**.
 ///
-/// "The Double Spend Attack".
-/// Simulates a user trying to spend the SAME funds twice simultaneously.
-/// If the engine is solid, exactly ONE transfer should succeed, and ONE should fail (Insufficient Funds).
-/// If both succeed, the system is broken.
+/// Labeled as "The Integrity Test," this suite validates the effectiveness of the engine's
+/// `Pessimistic Locking` strategy in preventing a user from spending the same funds
+/// twice via simultaneous network requests.
+///
+/// **Security Objectives:**
+/// - **Race Condition Mitigation:** Confirms that the database-level write lock (`FOR UPDATE`)
+///   atomically serializes concurrent balance checks.
+/// - **Insufficient Funds Enforcement:** Verifies that exactly one transaction succeeds
+///   while the second is rejected with a 4xx error, maintaining a non-negative balance.
+/// - **Consistency Invariant:** Ensures the ledger remains a "Single Source of Truth"
+///   where total debits never exceed the initial credit.
+///
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @Slf4j
@@ -55,6 +64,11 @@ class TransferDoubleSpendTest {
     static final GenericContainer<?> redis = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
             .withExposedPorts(6379);
 
+    /// **Infrastructure Orchestration & Pool Tuning**.
+    ///
+    /// Injects dynamic container credentials and optimizes the `HikariCP` connection pool.
+    /// Sets `maximum-pool-size` to 60 to prevent thread starvation during the
+    /// simultaneous execution of parallel attack threads.
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", () -> "jdbc:postgresql://" + postgres.getHost() + ":" + postgres.getFirstMappedPort() + "/opayque_test");
@@ -76,6 +90,11 @@ class TransferDoubleSpendTest {
     @Autowired private LedgerRepository ledgerRepository;
     @Autowired private PasswordEncoder passwordEncoder;
 
+    /// **Transactional Cleanup & Data Isolation**.
+    ///
+    /// Performs a hard delete on all ledger and user tables. This ensures that
+    /// randomized IBANs and stale balances from previous test runs do not
+    /// contaminate the current vulnerability audit.
     @BeforeEach
     void cleanSlate() {
         ledgerRepository.deleteAll();
@@ -83,6 +102,22 @@ class TransferDoubleSpendTest {
         userRepository.deleteAll();
     }
 
+
+    /// **Scenario: Concurrent Spend Contention (Race Condition Audit)**.
+    ///
+    /// Simulates a "Scammer" attempt to exploit network latency:
+    /// 1. Scammer has a balance of exactly $100.00.
+    /// 2. Two threads are launched simultaneously:
+    ///    - Thread A: Send $100.00 to Merchant A.
+    ///    - Thread B: Send $100.00 to Merchant B.
+    ///
+    /// **Validation Logic:**
+    /// - **Serialization:** The [AccountRepository] must lock the scammer's row.
+    /// - **The Result:** Exactly 1 Success and 1 Failure must be recorded.
+    /// - **Balance Integrity:** The final balance must be $0.00, proving the system
+    ///   blocked the second $100.00 outflow.
+    ///
+    /// @throws InterruptedException If the concurrent executor is interrupted.
     @Test
     @DisplayName("Vulnerability Check: Should prevent Double Spending of the same funds")
     void shouldPreventDoubleSpend() throws InterruptedException {
@@ -154,10 +189,22 @@ class TransferDoubleSpendTest {
         return userRepository.saveAndFlush(User.builder()
                 .email(email).fullName(fullName).password(passwordEncoder.encode("pwd")).role(Role.CUSTOMER).build());
     }
+
+    /// **Internal Provisioning: Wallet Entity Construction**.
+    ///
+    /// Generates a valid [Account] entity linked to the provided user identity.
+    /// Utilizes [System#nanoTime] to ensure high-entropy, unique IBANs for
+    /// non-colliding transactional history.
     private Account createAccount(User user, String currency) {
         return accountRepository.saveAndFlush(Account.builder()
                 .user(user).currencyCode(currency).iban("XX" + System.nanoTime()).build());
     }
+
+    /// **Atomic Initial Credit Seeding**.
+    ///
+    /// Manually injects a `CREDIT` ledger entry to establish the "Seed Funds" for the
+    /// scammer account. This bypasses the [TransferService] to ensure the test
+    /// isolates the contention logic of the transfer rather than the seeding logic.
     private void seedFunds(Account account, BigDecimal amount) {
         ledgerRepository.saveAndFlush(LedgerEntry.builder()
                 .account(account).amount(amount).currency(account.getCurrencyCode())

@@ -25,6 +25,20 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.*;
 
+/// **Epic 3: Atomic Transaction Engine — Behavioral Logic & Invariant Audit**.
+///
+/// This suite executes a "White-Box" behavioral audit of the [TransferService] using
+/// [MockitoExtension]. It isolates the service's orchestration logic from the physical
+/// persistence layer to verify that business rules, security guardrails, and atomic
+/// invariants are strictly enforced.
+///
+/// **Verification Domains:**
+/// - **Atomic Orchestration:** Confirms that a transfer correctly triggers symmetric
+///   `DEBIT` and `CREDIT` entries.
+/// - **Value Guardrails:** Ensures that invalid financial amounts (zero/negative) and
+///   insufficient liquidity states are intercepted.
+/// - **Security Constraints:** Validates the prevention of "Narcissistic Transfers" (Self-transfers)
+///   and orphaned account integrity violations.
 @ExtendWith(MockitoExtension.class)
 class TransferServiceTest {
 
@@ -36,6 +50,19 @@ class TransferServiceTest {
 
     // --- HAPPY PATH ---
 
+    /// **Functional Audit: Atomic Fund Movement Orchestration**.
+    ///
+    /// Validates the "Heart of the Bank" logic: moving funds between two distinct identities.
+    ///
+    /// **Logic Path Verified:**
+    /// 1. Sender and Receiver accounts are successfully resolved.
+    /// 2. Sender liquidity is verified against the requested amount.
+    /// 3. Two [CreateLedgerEntryRequest] objects are dispatched to the [LedgerService].
+    ///
+    /// **Invariant Assertions:**
+    /// - Both ledger entries MUST share a single, non-null `referenceId`.
+    /// - The first entry must be a `DEBIT`, and the second must be a `CREDIT`.
+    /// - Values must exactly match the user's intent without rounding errors.
     @Test
     @DisplayName("Should orchestrate atomic transfer with shared Reference ID")
     void shouldTransferFundsAtomically() {
@@ -85,6 +112,14 @@ class TransferServiceTest {
 
     // --- SAD PATHS ---
 
+    /// **Reliability Audit: Liquidity Gatekeeping**.
+    ///
+    /// Verifies that the service prevents "Phantom Money" creation by blocking transfers
+    /// that exceed the sender's current aggregated balance.
+    ///
+    /// **Failure Condition:** Throws [InsufficientFundsException] when `requestedAmount > currentBalance`.
+    /// **Security Verification:** Confirms that [LedgerService#recordEntry] is `never()` called,
+    /// ensuring no partial state is committed.
     @Test
     @DisplayName("Should block transfer if Sender has Insufficient Funds")
     void shouldThrowWhenInsufficientFunds() {
@@ -116,6 +151,13 @@ class TransferServiceTest {
         verify(ledgerService, never()).recordEntry(any());
     }
 
+    /// **Business Rule Audit: Self-Transfer Prevention**.
+    ///
+    /// Proves that the engine rejects requests where the sender and receiver resolve
+    /// to the same physical [User] identity, regardless of wallet UUIDs.
+    ///
+    /// This is a critical guardrail against accidental ledger bloat and circular
+    /// dependency complexity in reconciliation reports.
     @Test
     @DisplayName("Should block Self-Transfer (Sender == Receiver)")
     void shouldThrowWhenSelfTransfer() {
@@ -141,6 +183,11 @@ class TransferServiceTest {
                 .hasMessageContaining("Cannot transfer to self");
     }
 
+    /// **Input Integrity Audit: Negative/Zero Value Shield**.
+    ///
+    /// Ensures the service layer acts as a strict validator for the financial sign.
+    /// Any amount $\le 0$ must be rejected with an `IllegalArgumentException`
+    /// before any business logic or locking is initiated.
     @Test
     @DisplayName("Should reject Negative or Zero amounts")
     void shouldThrowWhenInvalidAmount() {
@@ -153,6 +200,13 @@ class TransferServiceTest {
                 .hasMessageContaining("Transfer amount must be positive");
     }
 
+    /// **Integrity Audit: Orphaned Sender Account Detection**.
+    ///
+    /// Validates the system's response to data corruption where an [Account] exists
+    /// but its linked [User] entity is `null` (Orphaned record).
+    ///
+    /// **Security Response:** Throws `IllegalStateException` to signal a critical
+    /// data integrity violation, preventing an "Ownerless" debit.
     @Test
     @DisplayName("Should throw IllegalStateException when Account data integrity is violated (Orphaned Account)")
     void shouldThrowWhenAccountIntegrityBroken() {
@@ -190,6 +244,12 @@ class TransferServiceTest {
                 .hasMessage("Account data integrity violation.");
     }
 
+    /// **Integrity Audit: Orphaned Receiver Account Detection**.
+    ///
+    /// Parallel branch coverage for integrity checks. Confirms that even if the
+    /// sender is valid, an orphaned receiver identity will halt the transaction.
+    /// Ensures the "All-or-Nothing" atomicity mandate is upheld during
+    /// partial identity failure.
     @Test
     @DisplayName("Should throw IllegalStateException when Receiver Account is orphaned (Branch Coverage)")
     void shouldThrowWhenReceiverIntegrityBroken() {

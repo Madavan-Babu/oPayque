@@ -13,5 +13,5 @@ public class TransactionController {
     // "Controllers MUST depend on Services"
     private final TransferService transferService;
 
-    // Placeholder to satisfy "Layered Architecture" rule
+    // Placeholder to satisfy the "Layered Architecture" rule, will be doing it in Story 3.3
 }
