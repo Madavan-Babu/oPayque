@@ -39,7 +39,15 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
-
+    /// Handles transaction rejections due to insufficient wallet balance.
+    /// Uses 402 PAYMENT_REQUIRED to explicitly signal a lack of funds,
+    /// allowing clients to trigger "Top Up" flows distinct from generic validation errors.
+    @ExceptionHandler(InsufficientFundsException.class)
+    public ResponseEntity<ErrorResponse> handleInsufficientFunds(InsufficientFundsException ex, WebRequest request) {
+        log.warn("Transaction Rejected - Insufficient Funds: {}", ex.getMessage());
+        // 402 Payment Required: The perfect semantic fit for "You're broke".
+        return buildErrorResponse(HttpStatus.PAYMENT_REQUIRED, ex.getMessage(), request);
+    }
 
     /// Handles Bean Validation failures triggered by the `@Valid` annotation on incoming DTO payloads.
     ///

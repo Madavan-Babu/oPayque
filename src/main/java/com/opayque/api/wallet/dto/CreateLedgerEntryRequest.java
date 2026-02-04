@@ -26,8 +26,8 @@ import java.util.UUID;
 /// @param currency The three-letter ISO 4217 code (e.g., "USD", "EUR").
 /// @param type The classification of the transaction (e.g., DEPOSIT, WITHDRAWAL).
 /// @param description An optional metadata string for transaction history/audit logs.
-/// @param timestamp An optional field primarily utilized for security filter testing; business logic
-///                  must utilize system-generated timestamps for the immutable ledger.
+/// @param timestamp An optional field primarily utilized for security filter testing.
+/// @param referenceId (New) The unique ID linking two entries in a P2P transfer.
 public record CreateLedgerEntryRequest(
         @NotNull
         UUID accountId,
@@ -47,5 +47,25 @@ public record CreateLedgerEntryRequest(
 
         // Optional: Only used to test security filters.
         // The service should IGNORE this and use System.now() to ensure an immutable audit trail.
-        LocalDateTime timestamp
-) {}
+        LocalDateTime timestamp,
+
+        // --- NEW FIELD (Story 3.1) ---
+        // Nullable for backward compatibility with existing tests/deposits.
+        // The TransferService will explicitly populate this.
+        UUID referenceId
+) {
+
+        // --- BACKWARD COMPATIBILITY CONSTRUCTOR ---
+        // This intercepts your 32 existing calls that only send 6 arguments.
+        // It automatically passes 'null' for the new referenceId.
+        public CreateLedgerEntryRequest(
+                UUID accountId,
+                BigDecimal amount,
+                String currency,
+                TransactionType type,
+                String description,
+                LocalDateTime timestamp
+        ) {
+                this(accountId, amount, currency, type, description, timestamp, null);
+        }
+}
