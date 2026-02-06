@@ -162,4 +162,26 @@ class GlobalExceptionHandlerTest {
         assertEquals("Insufficient funds for transfer", body.message());
         assertEquals("/test/path", body.path()); // Verify metadata preservation
     }
+
+    /// Validates that duplicate request attempts caught by the Idempotency Engine
+    /// are mapped to a 409-Conflict status with the explicit collision reason.
+    @Test
+    @DisplayName("Unit: Should handle IdempotencyException and return 409")
+    void shouldHandleIdempotencyException() {
+        // Arrange
+        String collisionMessage = "Duplicate request. Transaction [tx-123] already processed.";
+        IdempotencyException ex = new IdempotencyException(collisionMessage);
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleIdempotencyException(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode()); // The "Gatekeeper" Check
+
+        ErrorResponse body = response.getBody();
+        assertNotNull(body);
+        assertEquals("CONFLICT", body.code()); // Uses HttpStatus.name() by default
+        assertEquals(collisionMessage, body.message());
+        assertEquals("/test/path", body.path());
+    }
 }

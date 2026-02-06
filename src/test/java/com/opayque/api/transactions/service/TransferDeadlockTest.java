@@ -151,7 +151,7 @@ class TransferDeadlockTest {
         Runnable task1 = () -> {
             try {
                 latch.await(); // Wait for gun
-                transferService.transferFunds(aliceAccount.getId(), bob.getEmail(), "100.00", "USD");
+                transferService.transferFunds(aliceAccount.getId(), bob.getEmail(), "100.00", "USD", "deadlock-key-1");
                 successCount.incrementAndGet();
             } catch (Exception e) {
                 handleException(e, deadlockCount);
@@ -162,7 +162,7 @@ class TransferDeadlockTest {
         Runnable task2 = () -> {
             try {
                 latch.await(); // Wait for gun
-                transferService.transferFunds(bobAccount.getId(), alice.getEmail(), "100.00", "USD");
+                transferService.transferFunds(bobAccount.getId(), alice.getEmail(), "100.00", "USD", "deadlock-key-2");
                 successCount.incrementAndGet();
             } catch (Exception e) {
                 handleException(e, deadlockCount);

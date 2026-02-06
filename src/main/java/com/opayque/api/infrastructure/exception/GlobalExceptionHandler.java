@@ -49,6 +49,17 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.PAYMENT_REQUIRED, ex.getMessage(), request);
     }
 
+    /// Handles duplicate request attempts intercepted by the Idempotency Engine.
+    ///
+    /// @param ex The exception thrown when a locked or completed key is accessed again.
+    /// @param request The web request context.
+    /// @return A 409 Conflict response containing the explicit reason (e.g., "Transaction `xyz` already processed").
+    @ExceptionHandler(IdempotencyException.class)
+    public ResponseEntity<ErrorResponse> handleIdempotencyException(IdempotencyException ex, WebRequest request) {
+        log.warn("Idempotency Conflict: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
+    }
+
     /// Handles Bean Validation failures triggered by the `@Valid` annotation on incoming DTO payloads.
     ///
     /// *Note: This remains distinct as it returns a Map of fields, not a single message.*

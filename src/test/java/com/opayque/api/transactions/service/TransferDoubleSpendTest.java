@@ -144,7 +144,7 @@ class TransferDoubleSpendTest {
         Runnable attack1 = () -> {
             try {
                 latch.await();
-                transferService.transferFunds(scammerAccount.getId(), merchantA.getEmail(), "100.00", "USD");
+                transferService.transferFunds(scammerAccount.getId(), merchantA.getEmail(), "100.00", "USD", "attack-key-1");
                 successCount.incrementAndGet();
             } catch (Exception e) {
                 failCount.incrementAndGet();
@@ -155,7 +155,7 @@ class TransferDoubleSpendTest {
         Runnable attack2 = () -> {
             try {
                 latch.await();
-                transferService.transferFunds(scammerAccount.getId(), merchantB.getEmail(), "100.00", "USD");
+                transferService.transferFunds(scammerAccount.getId(), merchantB.getEmail(), "100.00", "USD", "attack-key-2");
                 successCount.incrementAndGet();
             } catch (Exception e) {
                 failCount.incrementAndGet();

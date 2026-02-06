@@ -2,6 +2,7 @@ package com.opayque.api.transactions.service;
 
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.infrastructure.exception.InsufficientFundsException;
+import com.opayque.api.infrastructure.idempotency.IdempotencyService;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
 import com.opayque.api.wallet.entity.Account;
 import com.opayque.api.wallet.entity.TransactionType;
@@ -44,6 +45,7 @@ class TransferServiceTest {
 
     @Mock private AccountService accountService;
     @Mock private LedgerService ledgerService;
+    @Mock private IdempotencyService idempotencyService;
 
     @InjectMocks
     private TransferService transferService;
@@ -94,9 +96,11 @@ class TransferServiceTest {
         given(ledgerService.calculateBalance(senderId)).willReturn(new BigDecimal("500.00"));
 
         // 2. Act
-        transferService.transferFunds(senderId, receiverEmail, amount.toString(), currency);
+        transferService.transferFunds(senderId, receiverEmail, amount.toString(), currency, "unit-test-key");
 
         // 3. Assert
+        verify(idempotencyService).lock("unit-test-key"); // Verify interaction
+        verify(idempotencyService).complete(eq("unit-test-key"), anyString());
         ArgumentCaptor<CreateLedgerEntryRequest> captor = ArgumentCaptor.forClass(CreateLedgerEntryRequest.class);
         verify(ledgerService, times(2)).recordEntry(captor.capture());
 
@@ -143,11 +147,12 @@ class TransferServiceTest {
         given(ledgerService.calculateBalance(senderId)).willReturn(new BigDecimal("10.00"));
 
         assertThatThrownBy(() ->
-                transferService.transferFunds(senderId, receiverEmail, amount.toString(), "USD")
+                transferService.transferFunds(senderId, receiverEmail, amount.toString(), "USD", "unit-test-key")
         )
                 .isInstanceOf(InsufficientFundsException.class)
                 .hasMessageContaining("Insufficient funds");
 
+        verify(idempotencyService).lock("unit-test-key"); // Verify interaction
         verify(ledgerService, never()).recordEntry(any());
     }
 
@@ -177,10 +182,11 @@ class TransferServiceTest {
         given(accountService.getAccountsForUser(userEmail)).willReturn(List.of(receiverAccount));
 
         assertThatThrownBy(() ->
-                transferService.transferFunds(senderId, userEmail, "50.00", "USD")
+                transferService.transferFunds(senderId, userEmail, "50.00", "USD", "unit-test-key")
         )
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Cannot transfer to self");
+        verify(idempotencyService).lock("unit-test-key"); // Verify interaction
     }
 
     /// **Input Integrity Audit: Negative/Zero Value Shield**.
@@ -194,10 +200,11 @@ class TransferServiceTest {
         UUID senderId = UUID.randomUUID();
 
         assertThatThrownBy(() ->
-                transferService.transferFunds(senderId, "bob@opayque.com", "-10.00", "USD")
+                transferService.transferFunds(senderId, "bob@opayque.com", "-10.00", "USD", "unit-test-key")
         )
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Transfer amount must be positive");
+        verify(idempotencyService).lock("unit-test-key"); // Verify interaction
     }
 
     /// **Integrity Audit: Orphaned Sender Account Detection**.
@@ -238,10 +245,11 @@ class TransferServiceTest {
 
         // 2. Act & Assert
         assertThatThrownBy(() ->
-                transferService.transferFunds(senderId, receiverEmail, "100.00", currency)
+                transferService.transferFunds(senderId, receiverEmail, "100.00", currency, "unit-test-key")
         )
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Account data integrity violation.");
+        verify(idempotencyService).lock("unit-test-key"); // Verify interaction
     }
 
     /// **Integrity Audit: Orphaned Receiver Account Detection**.
@@ -278,9 +286,10 @@ class TransferServiceTest {
 
         // 2. Act & Assert
         assertThatThrownBy(() ->
-                transferService.transferFunds(senderId, receiverEmail, "100.00", currency)
+                transferService.transferFunds(senderId, receiverEmail, "100.00", currency, "unit-test-key")
         )
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Account data integrity violation.");
+        verify(idempotencyService).lock("unit-test-key"); // Verify interaction
     }
 }

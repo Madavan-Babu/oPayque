@@ -2,6 +2,7 @@ package com.opayque.api.transactions.service;
 
 import com.opayque.api.infrastructure.exception.InsufficientFundsException;
 import com.opayque.api.identity.entity.User;
+import com.opayque.api.infrastructure.idempotency.IdempotencyService;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
 import com.opayque.api.wallet.entity.Account;
 import com.opayque.api.wallet.entity.TransactionType;
@@ -18,6 +19,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -42,6 +44,7 @@ class TransferPropertyTest {
     private AccountService accountService;
     private LedgerService ledgerService;
     private TransferService transferService;
+    private IdempotencyService idempotencyService;
 
     /// Orchestrates a clean mock environment for every individual property "try".
     ///
@@ -52,7 +55,8 @@ class TransferPropertyTest {
     void setUp() {
         accountService = Mockito.mock(AccountService.class);
         ledgerService = Mockito.mock(LedgerService.class);
-        transferService = new TransferService(accountService, ledgerService);
+        idempotencyService = Mockito.mock(IdempotencyService.class); // <--- 2. MOCK IT
+        transferService = new TransferService(accountService, ledgerService, idempotencyService);
     }
 
     /// **Invariant: Symmetric Atomicity & Reference Linking**.
@@ -78,12 +82,13 @@ class TransferPropertyTest {
         Assume.that(!senderId.equals(receiverId));
         String currency = "USD";
         String receiverEmail = "receiver-" + receiverId + "@opayque.com";
+        String idempotencyKey = UUID.randomUUID().toString(); // <--- 4. GENERATE KEY
 
         // 1. Mock valid accounts (Happy Path Setup)
         mockHappyPath(senderId, receiverId, receiverEmail, amount);
 
         // 2. Act
-        transferService.transferFunds(senderId, receiverEmail, amount.toString(), currency);
+        transferService.transferFunds(senderId, receiverEmail, amount.toString(), currency, idempotencyKey);
 
         // 3. Capture & Assert Invariants
         ArgumentCaptor<CreateLedgerEntryRequest> captor = ArgumentCaptor.forClass(CreateLedgerEntryRequest.class);
@@ -124,11 +129,12 @@ class TransferPropertyTest {
     ) {
         String currency = "USD";
         String receiverEmail = "receiver@opayque.com";
+        String idempotencyKey = "invalid-amt-key";
 
         // Act & Assert
         // We expect an IllegalArgumentException for every single negative/zero input
         try {
-            transferService.transferFunds(senderId, receiverEmail, amount.toString(), currency);
+            transferService.transferFunds(senderId, receiverEmail, amount.toString(), currency, idempotencyKey);
             throw new AssertionError("Should have thrown IllegalArgumentException for amount: " + amount);
         } catch (IllegalArgumentException expected) {
             // Success: The gate held.
@@ -136,6 +142,10 @@ class TransferPropertyTest {
 
         // Critical: Verify NO ledger entries were touched (Mock interaction check)
         verify(ledgerService, Mockito.never()).recordEntry(any());
+        // Verify we TRIED to lock, but NEVER completed
+        verify(idempotencyService).lock(idempotencyKey);
+        verify(idempotencyService, Mockito.never()).complete(anyString(), anyString());
+
     }
 
     /// **Invariant: The "Narcissism Block" (Circular Prevention)**.
@@ -150,6 +160,7 @@ class TransferPropertyTest {
     ) {
         String email = "me@opayque.com";
         String currency = "USD";
+        String idempotencyKey = "self-transfer-key";
 
         // Mock the scenario where Sender and Receiver resolve to the SAME User ID
         // Note: We mock the accounts to return the SAME user ID
@@ -162,7 +173,7 @@ class TransferPropertyTest {
 
         // Act & Assert
         try {
-            transferService.transferFunds(userId, email, amount.toString(), currency);
+            transferService.transferFunds(userId, email, amount.toString(), currency, idempotencyKey);
             throw new AssertionError("Should have rejected self-transfer");
         } catch (IllegalArgumentException expected) {
             // Success

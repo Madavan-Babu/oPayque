@@ -1,4 +1,5 @@
 .env
+.aiassistant
 .jqwik-database
 HELP.md
 target/

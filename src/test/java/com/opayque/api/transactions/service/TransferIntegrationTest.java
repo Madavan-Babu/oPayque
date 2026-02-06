@@ -25,6 +25,7 @@ import org.testcontainers.utility.DockerImageName;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -129,7 +130,8 @@ class TransferIntegrationTest {
         // 2. Act
         BigDecimal transferAmount = new BigDecimal("100.00");
         // FIX: Passing senderAccount.getId() (Account ID), NOT sender.getId() (User ID)
-        transferService.transferFunds(senderAccount.getId(), receiver.getEmail(), transferAmount.toString(), "USD");
+        String key = "int-test-" + UUID.randomUUID();
+        transferService.transferFunds(senderAccount.getId(), receiver.getEmail(), transferAmount.toString(), "USD", key);
 
         // 3. Assert
         List<LedgerEntry> senderEntries = ledgerRepository.findByAccount(senderAccount);
@@ -170,7 +172,8 @@ class TransferIntegrationTest {
 
         // 2. Act
         // FIX: Passing Account ID
-        transferService.transferFunds(senderAccount.getId(), receiver.getEmail(), "40.00", "USD");
+        String key = "int-test-" + UUID.randomUUID();
+        transferService.transferFunds(senderAccount.getId(), receiver.getEmail(), "40.00", "USD", key);
 
         // 3. Assert
         BigDecimal senderBalance = ledgerRepository.getBalance(senderAccount.getId());
@@ -198,10 +201,11 @@ class TransferIntegrationTest {
         User receiver = createUser("rich@opayque.com", "Rich Receiver");
         createAccount(receiver, "USD");
 
+        String key = "int-test-" + UUID.randomUUID();
         // 2. Act & Assert
         // FIX: Passing Account ID AND checking for specific Exception
         assertThatThrownBy(() ->
-                transferService.transferFunds(senderAccount.getId(), receiver.getEmail(), "50.00", "USD")
+                transferService.transferFunds(senderAccount.getId(), receiver.getEmail(), "50.00", "USD", key)
         )
                 .isInstanceOf(InsufficientFundsException.class); // This confirms it failed for the RIGHT reason
 
