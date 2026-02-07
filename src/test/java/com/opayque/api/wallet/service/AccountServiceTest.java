@@ -11,6 +11,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -183,4 +184,89 @@ class AccountServiceTest {
         // Explicitly verifies the lookup attempt occurred
         verify(accountRepository).findById(unknownAccountId);
     }
+
+    /// Scenario: Successful Wallet ID Resolution.
+    ///
+    /// Validates that the service correctly maps a (User Email + Currency) pair
+    /// to a specific Wallet UUID. This is the "Happy Path" for the transfer service.
+    @Test
+    @DisplayName("GetIdByEmail: Should return Wallet UUID when User and Currency match")
+    void shouldResolveWalletIdSuccessfully() {
+        // Arrange
+        String email = "sender@opayque.com";
+        String currency = "USD";
+        UUID userId = UUID.randomUUID();
+        UUID expectedWalletId = UUID.randomUUID();
+
+        User mockUser = User.builder().id(userId).email(email).build();
+
+        // Mock the wallet (Ensure currency matches!)
+        Account mockWallet = Account.builder()
+                .id(expectedWalletId)
+                .user(mockUser)
+                .currencyCode("USD")
+                .build();
+
+        when(userRepository.findByEmail(email)).thenReturn(Optional.of(mockUser));
+        when(accountRepository.findAllByUserId(userId)).thenReturn(List.of(mockWallet));
+
+        // Act
+        UUID actualId = accountService.getAccountIdByEmail(email, currency);
+
+        // Assert
+        assertThat(actualId).isEqualTo(expectedWalletId);
+    }
+
+    /// Scenario: Identity Resolution Failure.
+    ///
+    /// Validates that the lookup fails fast if the email is not found,
+    /// preventing unnecessary DB queries for wallets.
+    @Test
+    @DisplayName("GetIdByEmail: Should fail fast if User Email does not exist")
+    void shouldFailIdLookupWhenUserNotFound() {
+        // Arrange
+        String unknownEmail = "ghost@opayque.com";
+        when(userRepository.findByEmail(unknownEmail)).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThatThrownBy(() -> accountService.getAccountIdByEmail(unknownEmail, "USD"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("User not found");
+
+        // Verify we never even looked for wallets
+        verify(accountRepository, never()).findAllByUserId(any());
+    }
+
+    /// Scenario: Missing Currency Wallet.
+    ///
+    /// Validates the business rule: A user might exist, but if they don't possess
+    /// a wallet in the requested currency, we must reject the operation.
+    @Test
+    @DisplayName("GetIdByEmail: Should fail if User has no wallet in the requested currency")
+    void shouldFailIfUserHasNoWalletForCurrency() {
+        // Arrange
+        String email = "euro_user@opayque.com";
+        String requestedCurrency = "USD"; // User wants USD...
+        UUID userId = UUID.randomUUID();
+
+        User mockUser = User.builder().id(userId).email(email).build();
+
+        // ...but User ONLY has a EUR wallet
+        Account euroWallet = Account.builder()
+                .id(UUID.randomUUID())
+                .user(mockUser)
+                .currencyCode("EUR")
+                .build();
+
+        when(userRepository.findByEmail(email)).thenReturn(Optional.of(mockUser));
+        // Return portfolio containing only EUR
+        when(accountRepository.findAllByUserId(userId)).thenReturn(List.of(euroWallet));
+
+        // Act & Assert
+        assertThatThrownBy(() -> accountService.getAccountIdByEmail(email, requestedCurrency))
+                .isInstanceOf(IllegalArgumentException.class)
+                // Match the exact error message format from your service
+                .hasMessage("No " + requestedCurrency + " wallet found for user");
+    }
+
 }

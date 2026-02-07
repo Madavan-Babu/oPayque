@@ -67,4 +67,36 @@ class PiiLoggingConverterTest {
         when(event.getFormattedMessage()).thenReturn("User dev@opayque.com login");
         assertEquals("User d***@opayque.com login", converter.convert(event));
     }
+
+  /**
+   * Validates the PII masking engine's ability to sanitize email identifiers across multiple log
+   * format conventions used in FinTech audit trails.
+   *
+   * <p>This test ensures regulatory compliance (PCI-DSS, GDPR Article 32) by verifying that both
+   * legacy plain-text and modern bracketed notation formats receive consistent data anonymization
+   * treatment. The converter must preserve the email domain for transaction correlation while
+   * applying irreversible masking to the local part.
+   *
+   * <p>Test Coverage: - Legacy Format: "User: email@domain.com" - Common in payment gateway logs -
+   * Bracketed Format: "User: [email@domain.com]" - Used in structured audit events
+   *
+   * <p>Security Implications: - Prevents account enumeration attacks through log analysis -
+   * Maintains referential integrity for fraud detection systems - Ensures consistent PII handling
+   * across microservice boundaries
+   *
+   * <p>FinTech Context: - Required for PCI-DSS Requirement 3.4 (PAN protection in logs) - Supports
+   * AML/KYC audit requirements for transaction attribution - Compatible with SIEM correlation rules
+   * using email domains
+   */
+  @Test
+  @DisplayName("Unit: Should support BOTH standard and bracketed log formats")
+  void shouldSupportDualFormats() {
+        // 1. Old Style (Standard)
+        when(event.getFormattedMessage()).thenReturn("User: old@opayque.com login");
+        assertEquals("User: o***@opayque.com login", converter.convert(event));
+
+        // 2. New Style (Brackets)
+        when(event.getFormattedMessage()).thenReturn("User: [new@opayque.com] login");
+        assertEquals("User: [n***@opayque.com] login", converter.convert(event));
+    }
 }

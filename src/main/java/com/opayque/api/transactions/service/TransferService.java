@@ -81,7 +81,9 @@ public class TransferService {
             // Parse and validate monetary amount to prevent precision loss
             BigDecimal amount = new BigDecimal(amountStr);
             if (amount.compareTo(BigDecimal.ZERO) <= 0) {
-                throw new IllegalArgumentException("Transfer amount must be positive");
+                // SECURITY: Log this. Negative transfers are often exploit attempts.
+                log.warn("Transfer rejected: Non-positive amount [{}] from sender [{}]", amount, senderId);
+                throw new IllegalArgumentException("Transfer amount must be greater than zero");
             }
 
             // Acquire pessimistic lock on sender wallet to serialize concurrent debits

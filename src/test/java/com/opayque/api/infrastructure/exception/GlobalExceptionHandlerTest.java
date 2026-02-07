@@ -184,4 +184,26 @@ class GlobalExceptionHandlerTest {
         assertEquals(collisionMessage, body.message());
         assertEquals("/test/path", body.path());
     }
+
+    /// Validates that traffic spikes caught by the Rate Limiter are correctly
+    /// mapped to a 429 Too Many Requests status.
+    /// This ensures clients receive the standard semantic signal to back off.
+    @Test
+    @DisplayName("Unit: Should handle RateLimitExceededException and return 429")
+    void shouldHandleRateLimitExceededException() {
+        // Arrange
+        RateLimitExceededException ex = new RateLimitExceededException("Rate limit exceeded. Try again later.");
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleRateLimitExceeded(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, response.getStatusCode()); // The "Traffic Cop" Check
+
+        ErrorResponse body = response.getBody();
+        assertNotNull(body);
+        assertEquals("TOO_MANY_REQUESTS", body.code());
+        assertEquals("Rate limit exceeded. Try again later.", body.message());
+        assertEquals("/test/path", body.path()); // Verify metadata preservation
+    }
 }

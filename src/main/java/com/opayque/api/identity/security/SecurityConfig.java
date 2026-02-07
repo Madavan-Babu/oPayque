@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -76,9 +77,42 @@ public class SecurityConfig {
                 // --- Request Authorization ---
                 /// Defines the public vs. protected service boundaries.
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/v1/auth/**", "/api/v1/security-check").permitAll()
+                        // =====================================================================
+                        // 1. PUBLIC ZONE (Entry Points)
+                        // =====================================================================
+                        // Login & Register are obvious.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/register", "/api/v1/auth/login").permitAll()
+
+                        // REFRESH: Must be public because the Access Token is likely expired.
+                        // The Service layer validates the Refresh Token payload strictly.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/refresh").permitAll()
+
+                        // Infrastructure check
+                        .requestMatchers("/api/v1/security-check").permitAll()
+
+                        // =====================================================================
+                        // 2. PROTECTED ZONE (Strictly Authenticated)
+                        // =====================================================================
+                        // Transfers (The Critical Fix)
+                        .requestMatchers("/api/v1/transfers/**").authenticated()
+
+                        // Accounts & Wallet
+                        .requestMatchers("/api/v1/accounts/**").authenticated()
+
+                        // Logout (Must have a valid token to invalidate it)
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/logout").authenticated()
+
+                        // User Profiles & Admin
+                        .requestMatchers("/api/v1/users/**").authenticated()
+                        .requestMatchers("/api/v1/admin/**").authenticated()
+                        .requestMatchers("/api/v1/demo/**").authenticated()
+
+                        // =====================================================================
+                        // 3. THE SAFETY NET
+                        // =====================================================================
                         .anyRequest().authenticated()
                 )
+
 
                 // --- Session & Authentication Management ---
                 /// Enforces a strictly stateless architecture. No server-side session

@@ -3,6 +3,7 @@ package com.opayque.api.wallet.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opayque.api.identity.entity.Role;
 import com.opayque.api.identity.entity.User;
+import com.opayque.api.identity.repository.RefreshTokenRepository;
 import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.identity.service.JwtService;
 import com.opayque.api.wallet.repository.AccountRepository;
@@ -19,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -33,7 +35,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /// It guards against:
 /// 1. Identity Spoofing (Injected User IDs).
 /// 2. Unauthorized Public Access (Broken Authentication).
-@SpringBootTest
+// Align WebEnvironment with other tests to enable Context Caching and prevent DB locks.
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class WalletSecurityIntegrationTest {
@@ -41,6 +44,7 @@ class WalletSecurityIntegrationTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private UserRepository userRepository;
     @Autowired private AccountRepository accountRepository;
+    @Autowired private RefreshTokenRepository refreshTokenRepository;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private JwtService jwtService;
     @Autowired private ObjectMapper objectMapper;
@@ -49,7 +53,10 @@ class WalletSecurityIntegrationTest {
     /// absolute isolation between security audit scenarios.
     @BeforeEach
     void setup() {
+        // 1. Delete "Child" records first (The Zombies)
+        // If we don't do this, the DB blocks us from deleting the Users.
         accountRepository.deleteAll();
+        refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 
@@ -57,22 +64,22 @@ class WalletSecurityIntegrationTest {
     ///
     /// Validates that the system ignores any UserID injected into the request body
     /// (Mass Assignment attack).
-    ///
-    /// The logic must verify that the wallet is always assigned to the identity
-    /// extracted from the `Authorization` token, regardless of malicious payload content.
     @Test
     @DisplayName("Security: Should ignore injected UserID in request body (Token Authority)")
     void shouldIgnoreInjectedUserId() throws Exception {
+        // FIX: Use unique suffix to prevent collision if DB cleanup fails (The "Zombie Context" defense)
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+
         // Step 1: Establish victim and attacker identities.
         User victim = userRepository.save(User.builder()
-                .email("victim@opayque.com")
+                .email("victim-" + suffix + "@opayque.com")
                 .password(passwordEncoder.encode("pass"))
                 .fullName("Victim User")
                 .role(Role.CUSTOMER)
                 .build());
 
         User attacker = userRepository.save(User.builder()
-                .email("attacker@opayque.com")
+                .email("attacker-" + suffix + "@opayque.com")
                 .password(passwordEncoder.encode("pass"))
                 .fullName("Attacker User")
                 .role(Role.CUSTOMER)

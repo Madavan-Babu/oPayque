@@ -1,5 +1,9 @@
 package com.opayque.api.identity.controller;
 
+import org.springframework.http.HttpHeaders;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.web.servlet.MvcResult;
+import com.jayway.jsonpath.JsonPath;
 import jakarta.transaction.Transactional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -160,5 +164,83 @@ class AuthControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("!!Invalid JSON!!"))
                 .andExpect(status().isInternalServerError());
+    }
+
+    /// Scenario: Secure Logout (Happy Path).
+    ///
+    /// Validates that a legitimate user with a valid Bearer token can terminate
+    /// their session. This exercises the "if (authHeader != null...)" true block.
+    @Test
+    @DisplayName("Logout: Should successfully invalidate session with valid token")
+    void shouldLogoutSuccessfully() throws Exception {
+        // 1. Arrange: Create Identity
+        String email = "logout-success@opayque.com";
+        String password = "Password123!";
+        String registerJson = """
+            {
+                "email": "%s",
+                "password": "%s",
+                "fullName": "Logout User"
+            }
+            """.formatted(email, password);
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerJson))
+                .andExpect(status().isCreated());
+
+        // 2. Act: Login to get a REAL Token
+        String loginJson = """
+            {
+                "email": "%s",
+                "password": "%s"
+            }
+            """.formatted(email, password);
+
+        MvcResult result = mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginJson))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        // Extract the real Access Token
+        String response = result.getResponse().getContentAsString();
+        String accessToken = JsonPath.read(response, "$.token");
+
+        // 3. Act & Assert: Logout
+        // This hits the "authService.logout(token)" line
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken))
+                .andExpect(status().isOk());
+    }
+
+    /// Scenario: Missing Header (Fail Path).
+    ///
+    /// Validates the controller's manual check when the header is NULL.
+    /// We use @WithMockUser to bypass the Security Filter, allowing the request
+    /// to reach the Controller's logic where the check resides.
+    @Test
+    @DisplayName("Logout: Should return 401 when Authorization header is missing")
+    @WithMockUser // Bypasses Security Filter to hit the Controller logic
+    void shouldFailLogoutWhenHeaderMissing() throws Exception {
+        // Act: Request without header
+        // Assert: Hits "return ResponseEntity.status(HttpStatus.UNAUTHORIZED)"
+        mockMvc.perform(post("/api/v1/auth/logout"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    /// Scenario: Malformed Header (Fail Path).
+    ///
+    /// Validates the check "authHeader.startsWith('Bearer ')".
+    /// Sending "Basic" or raw tokens must fail.
+    @Test
+    @DisplayName("Logout: Should return 401 when Authorization header is malformed")
+    @WithMockUser // Bypasses Security Filter to hit the Controller logic
+    void shouldFailLogoutWhenHeaderMalformed() throws Exception {
+        // Act: Request with "Basic" instead of "Bearer"
+        // Assert: Hits the 'else' block in the controller
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .header(HttpHeaders.AUTHORIZATION, "Basic some-base64-string"))
+                .andExpect(status().isUnauthorized());
     }
 }

@@ -165,4 +165,36 @@ public class AccountService {
                     return new IllegalArgumentException("Account not found");
                 });
     }
+
+    /// Resolves the specific Wallet ID for a user based on their email and target currency.
+    ///
+    /// This is a critical Security/BOLA check. It ensures that the authenticated user
+    /// actually owns a wallet in the currency they are trying to spend.
+    ///
+    /// @param userEmail    The authenticated email address from the JWT.
+    /// @param currencyCode The currency of the transaction (e.g., "USD").
+    /// @return The UUID of the user's wallet for that specific currency.
+    /// @throws IllegalArgumentException If the user or wallet does not exist.
+    @Transactional(readOnly = true)
+    public UUID getAccountIdByEmail(String userEmail, String currencyCode) {
+        log.debug("Resolving wallet ID for user: [{}] currency: [{}]", userEmail, currencyCode);
+
+        // 1. Find the User
+        User owner = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> {
+                    log.error("Wallet lookup failed. User Email [{}] not found.", userEmail);
+                    return new IllegalArgumentException("User not found");
+                });
+
+        // 2. Find the Specific Wallet (e.g., their USD account)
+        // We filter the portfolio in-memory or via query to find the exact match.
+        return accountRepository.findAllByUserId(owner.getId()).stream()
+                .filter(account -> account.getCurrencyCode().equals(currencyCode))
+                .findFirst()
+                .map(Account::getId)
+                .orElseThrow(() -> {
+                    log.error("Wallet lookup failed. User [{}] has no [{}] account.", owner.getId(), currencyCode);
+                    return new IllegalArgumentException("No " + currencyCode + " wallet found for user");
+                });
+    }
 }

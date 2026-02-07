@@ -60,6 +60,25 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
+    /// Handles traffic spikes caught by the Rate Limiter (Token Bucket/Fixed Window).
+    ///
+    /// @param ex The exception thrown when a user exceeds their request quota.
+    /// @param request The web request context.
+    /// @return A 429 Too Many Requests response with a "Cool Down" message.
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleRateLimitExceeded(RateLimitExceededException ex, WebRequest request) {
+        // Log at WARN level because this is a client error, not a system failure.
+        // Note: The RateLimiterService already logs the SECURITY_EVENT, so we just log the HTTP mapping here.
+        log.warn("Throttling active: {}", ex.getMessage());
+
+        return buildErrorResponse(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "TOO_MANY_REQUESTS",
+                ex.getMessage(), // "Rate limit exceeded. Try again later."
+                request
+        );
+    }
+
     /// Handles Bean Validation failures triggered by the `@Valid` annotation on incoming DTO payloads.
     ///
     /// *Note: This remains distinct as it returns a Map of fields, not a single message.*

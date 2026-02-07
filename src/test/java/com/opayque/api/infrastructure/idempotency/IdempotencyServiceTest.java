@@ -1,6 +1,7 @@
 package com.opayque.api.infrastructure.idempotency;
 
 import com.opayque.api.infrastructure.exception.IdempotencyException;
+import com.opayque.api.infrastructure.exception.ServiceUnavailableException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -8,16 +9,19 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.Duration;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.BDDMockito.given;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.*;
 
 
 /**
@@ -148,5 +152,51 @@ class IdempotencyServiceTest {
         assertThatThrownBy(() -> idempotencyService.lock(null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Idempotency key cannot be null");
+    }
+
+    /// Scenario: Infrastructure Failure (Fail Closed).
+    ///
+    /// Validates that if the Lock Service (Redis) is unreachable, the system
+    /// ABORTS the transaction (Fail Closed) rather than proceeding without a lock.
+    /// This prevents "Split Brain" or double-spending during outages.
+    @Test
+    @DisplayName("Lock: Should FAIL CLOSED (503) when Redis is unreachable")
+    void shouldFailClosedWhenRedisIsDown() {
+        // Arrange
+        String key = "txn-123";
+        // Simulate Redis Connection Death
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenThrow(new RedisConnectionFailureException("Connection refused"));
+
+        // Act & Assert
+        // MUST throw ServiceUnavailableException (503), NOT generic Exception
+        assertThatThrownBy(() -> idempotencyService.lock(key))
+                .isInstanceOf(ServiceUnavailableException.class)
+                .hasMessage("Transaction service temporarily unavailable. Please try again.");
+    }
+
+    /// Scenario: Completion Failure (Fail Open).
+    ///
+    /// Validates that if Redis dies *after* the transaction is done (during the update to "COMPLETED"),
+    /// we simply log it and move on. We do NOT rollback the successful transaction.
+    /// The TTL will eventually expire the key anyway.
+    @Test
+    @DisplayName("Complete: Should SWALLOW exception if Redis update fails (Non-Critical)")
+    void shouldLogAndContinueIfCompleteFails() {
+        // Arrange
+        String key = "txn-123";
+        String txId = UUID.randomUUID().toString();
+
+        // Simulate Redis Death during the "Mark as Completed" phase
+        doThrow(new RedisConnectionFailureException("Connection lost"))
+                .when(valueOperations).set(anyString(), eq(txId), any(Duration.class));
+
+        // Act
+        // This should NOT throw an exception.
+        assertDoesNotThrow(() -> idempotencyService.complete(key, txId));
+
+        // Assert
+        // We verified it didn't crash. Ideally, we would verify the log,
+        // but verifying no exception is sufficient for "Fail Open" logic.
     }
 }

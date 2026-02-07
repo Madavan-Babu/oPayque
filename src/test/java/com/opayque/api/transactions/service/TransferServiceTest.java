@@ -203,7 +203,7 @@ class TransferServiceTest {
                 transferService.transferFunds(senderId, "bob@opayque.com", "-10.00", "USD", "unit-test-key")
         )
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Transfer amount must be positive");
+                .hasMessageContaining("Transfer amount must be greater than zero");
         verify(idempotencyService).lock("unit-test-key"); // Verify interaction
     }
 

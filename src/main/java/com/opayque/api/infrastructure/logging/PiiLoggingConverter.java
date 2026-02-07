@@ -15,7 +15,9 @@ public class PiiLoggingConverter extends MessageConverter {
 
     /// Compiled pattern for high-frequency log interception.
     /// Matches email structures: Boundary -> Local Part -> @ -> Domain -> Boundary.
-    private static final Pattern EMAIL_PATTERN = Pattern.compile("(?<=^|\\s|\"|'|:)([\\w\\.-]+)(@)([\\w\\.-]+)(?=$|\\s|\"|'|\\.)");
+    // Improved Regex: Added \[ (open bracket) to the start and \] (close bracket) to the end.
+    // Logic: Lookbehind for (Start OR Space OR Quote OR Colon OR Bracket)
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("(?<=^|\\s|\"|'|:|\\[)([\\w\\.-]+)(@)([\\w\\.-]+)(?=$|\\s|\"|'|\\.|,|\\])");
 
     /// Core conversion entry point for the Logback pipeline.
     /// Intercepts the formatted message and applies sanitization logic before egress.
