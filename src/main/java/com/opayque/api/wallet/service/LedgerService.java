@@ -98,6 +98,7 @@ public class LedgerService {
                 .originalCurrency(originalCurrency)
                 .exchangeRate(exchangeRate)
                 .recordedAt(LocalDateTime.now())
+                .referenceId(request.referenceId())
                 .build();
 
         // 4. Persist

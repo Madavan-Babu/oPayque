@@ -140,4 +140,70 @@ class GlobalExceptionHandlerTest {
         // Verify path metadata is preserved
         assertEquals("/test/path", body.path());
     }
+
+    /// Validates that transaction rejections due to insufficient funds are
+    /// correctly mapped to the specific 402 Payment Required status.
+    /// This ensures clients can distinguish between "Bad Syntax" (400) and "Empty Wallet" (402).
+    @Test
+    @DisplayName("Unit: Should handle InsufficientFundsException and return 402")
+    void shouldHandleInsufficientFundsException() {
+        // Arrange
+        InsufficientFundsException ex = new InsufficientFundsException("Insufficient funds for transfer");
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleInsufficientFunds(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.PAYMENT_REQUIRED, response.getStatusCode()); // The "Ultra-Fintech" Check
+
+        ErrorResponse body = response.getBody();
+        assertNotNull(body);
+        assertEquals("PAYMENT_REQUIRED", body.code());
+        assertEquals("Insufficient funds for transfer", body.message());
+        assertEquals("/test/path", body.path()); // Verify metadata preservation
+    }
+
+    /// Validates that duplicate request attempts caught by the Idempotency Engine
+    /// are mapped to a 409-Conflict status with the explicit collision reason.
+    @Test
+    @DisplayName("Unit: Should handle IdempotencyException and return 409")
+    void shouldHandleIdempotencyException() {
+        // Arrange
+        String collisionMessage = "Duplicate request. Transaction [tx-123] already processed.";
+        IdempotencyException ex = new IdempotencyException(collisionMessage);
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleIdempotencyException(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode()); // The "Gatekeeper" Check
+
+        ErrorResponse body = response.getBody();
+        assertNotNull(body);
+        assertEquals("CONFLICT", body.code()); // Uses HttpStatus.name() by default
+        assertEquals(collisionMessage, body.message());
+        assertEquals("/test/path", body.path());
+    }
+
+    /// Validates that traffic spikes caught by the Rate Limiter are correctly
+    /// mapped to a 429 Too Many Requests status.
+    /// This ensures clients receive the standard semantic signal to back off.
+    @Test
+    @DisplayName("Unit: Should handle RateLimitExceededException and return 429")
+    void shouldHandleRateLimitExceededException() {
+        // Arrange
+        RateLimitExceededException ex = new RateLimitExceededException("Rate limit exceeded. Try again later.");
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleRateLimitExceeded(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, response.getStatusCode()); // The "Traffic Cop" Check
+
+        ErrorResponse body = response.getBody();
+        assertNotNull(body);
+        assertEquals("TOO_MANY_REQUESTS", body.code());
+        assertEquals("Rate limit exceeded. Try again later.", body.message());
+        assertEquals("/test/path", body.path()); // Verify metadata preservation
+    }
 }

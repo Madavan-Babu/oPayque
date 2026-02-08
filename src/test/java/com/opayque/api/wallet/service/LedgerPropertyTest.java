@@ -228,6 +228,11 @@ class LedgerPropertyTest {
             return entity;
         }
 
+        @Override
+        public List<LedgerEntry> findByAccount(Account account) {
+            return List.of();
+        }
+
         /// Aggregates balance from the in-memory store using the same CREDIT/DEBIT logic as the production DB.
         public BigDecimal getBalance(UUID accountId) {
             return store.stream()

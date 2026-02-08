@@ -55,7 +55,8 @@ import java.util.UUID;
                 // Includes 'transaction_type' and 'amount' so the aggregation query
                 // can run purely in the Index (Index-Only Scan), bypassing the Heap.
                 @Index(name = "idx_ledger_covering", columnList = "account_id, transaction_type, amount"),
-                @Index(name = "idx_ledger_recorded_at", columnList = "recorded_at")
+                @Index(name = "idx_ledger_recorded_at", columnList = "recorded_at"),
+                @Index(name = "idx_ledger_reference_id", columnList = "reference_id")
         }
 )
 @Immutable
@@ -112,6 +113,12 @@ public class LedgerEntry {
     @Enumerated(EnumType.STRING)
     @Column(name = "transaction_type", nullable = false)
     private TransactionType transactionType;
+
+    // --- NEW FIELD (Story 3.1) ---
+    // Links Debit and Credit entries for atomic transfers.
+    // Intentionally Nullable to support legacy data and simple deposits.
+    @Column(name = "reference_id")
+    private UUID referenceId;
 
     /// User-defined or system-generated context for the entry.
     @Column(nullable = false)

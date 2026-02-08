@@ -39,7 +39,45 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
+    /// Handles transaction rejections due to insufficient wallet balance.
+    /// Uses 402 PAYMENT_REQUIRED to explicitly signal a lack of funds,
+    /// allowing clients to trigger "Top Up" flows distinct from generic validation errors.
+    @ExceptionHandler(InsufficientFundsException.class)
+    public ResponseEntity<ErrorResponse> handleInsufficientFunds(InsufficientFundsException ex, WebRequest request) {
+        log.warn("Transaction Rejected - Insufficient Funds: {}", ex.getMessage());
+        // 402 Payment Required: The perfect semantic fit for "You're broke".
+        return buildErrorResponse(HttpStatus.PAYMENT_REQUIRED, ex.getMessage(), request);
+    }
 
+    /// Handles duplicate request attempts intercepted by the Idempotency Engine.
+    ///
+    /// @param ex The exception thrown when a locked or completed key is accessed again.
+    /// @param request The web request context.
+    /// @return A 409 Conflict response containing the explicit reason (e.g., "Transaction `xyz` already processed").
+    @ExceptionHandler(IdempotencyException.class)
+    public ResponseEntity<ErrorResponse> handleIdempotencyException(IdempotencyException ex, WebRequest request) {
+        log.warn("Idempotency Conflict: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
+    }
+
+    /// Handles traffic spikes caught by the Rate Limiter (Token Bucket/Fixed Window).
+    ///
+    /// @param ex The exception thrown when a user exceeds their request quota.
+    /// @param request The web request context.
+    /// @return A 429 Too Many Requests response with a "Cool Down" message.
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleRateLimitExceeded(RateLimitExceededException ex, WebRequest request) {
+        // Log at WARN level because this is a client error, not a system failure.
+        // Note: The RateLimiterService already logs the SECURITY_EVENT, so we just log the HTTP mapping here.
+        log.warn("Throttling active: {}", ex.getMessage());
+
+        return buildErrorResponse(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "TOO_MANY_REQUESTS",
+                ex.getMessage(), // "Rate limit exceeded. Try again later."
+                request
+        );
+    }
 
     /// Handles Bean Validation failures triggered by the `@Valid` annotation on incoming DTO payloads.
     ///

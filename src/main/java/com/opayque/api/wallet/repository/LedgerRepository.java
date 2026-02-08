@@ -1,10 +1,12 @@
 package com.opayque.api.wallet.repository;
 
+import com.opayque.api.wallet.entity.Account;
 import com.opayque.api.wallet.entity.LedgerEntry;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.UUID;
 
 /// Data access layer for the immutable transaction ledger.
@@ -19,6 +21,16 @@ import java.util.UUID;
 ///   financial auditing and history.
 @Repository
 public interface LedgerRepository extends JpaRepository<LedgerEntry, UUID> {
+
+    /// Retrieves a list of ledger entries associated with the specified account.
+    /// This method provides the transaction history for an account, which can be used
+    /// to verify atomic transfers and analyze account activity.
+    ///
+    /// @param account The account for which the ledger entries are to be retrieved.
+    ///                Must be a valid non-null Account object.
+    /// @return A list of `LedgerEntry` objects associated with the specified account.
+    ///         The returned list may be empty if no transactions are found for the account.
+    List<LedgerEntry> findByAccount(Account account);
 
     /// Calculates the current available balance for a specific account using a zero-sum aggregation.
     ///

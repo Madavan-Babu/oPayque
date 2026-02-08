@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260204-001-add-reference-id" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="ledger_entries"/>
+            <not>
+                <columnExists tableName="ledger_entries" columnName="reference_id"/>
+            </not>
+        </preConditions>
+
+        <comment>Story 3.1: Atomic Transactions. Adds reference_id to link P2P transfers.</comment>
+
+        <addColumn tableName="ledger_entries">
+            <column name="reference_id" type="UUID">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <createIndex tableName="ledger_entries" indexName="idx_ledger_reference_id">
+            <column name="reference_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>
