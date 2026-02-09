@@ -58,3 +58,13 @@ application:
       expiration: 900000 # 15 mins
       refresh-token:
         expiration: 604800000 # 7 Days (milliseconds)
+
+# =========================================================================
+#                        EPIC 4: ENCRYPTION VAULT
+# =========================================================================
+opayque:
+  security:
+    # The Master Key for the AES-256 Vault.
+    # In PROD, inject this via Environment Variable: ENCRYPTION_KEY
+    # It will be Hashed by SHA-256, so length doesn't strictly matter here.
+    encryption-key: ${ENCRYPTION_KEY:MySuperSecretKeyForEncryption!!}
