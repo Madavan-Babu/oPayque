@@ -40,3 +40,15 @@ application:
       expiration: 900000 # 15 mins
       refresh-token:
         expiration: 604800000 # 7 Days (milliseconds)
+
+
+# =========================================================================
+#                        TEST SECURITY CONFIGURATION
+# =========================================================================
+opayque:
+  security:
+    active-version: 1
+    # Standard YAML Map syntax - Spring Boot binds this automatically to Map<Integer, String>
+    keys:
+      1: TestKeyV1_For_Integration_Testing_12345
+    hashing-key: TestHashingKey_For_Blind_Index_12345

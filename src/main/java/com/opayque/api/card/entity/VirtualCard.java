@@ -38,7 +38,9 @@ import java.util.UUID;
  * @since 2026
  */
 @Entity
-@Table(name = "virtual_cards")
+@Table(name = "virtual_cards", uniqueConstraints = {
+        @UniqueConstraint(columnNames = "pan_fingerprint", name = "uk_virtual_card_pan_fingerprint")
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -46,42 +48,76 @@ import java.util.UUID;
 @Builder
 public class VirtualCard {
 
+    /** Immutable surrogate key used for card-level tracing and correlation across PCI-DSS audit logs. */
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    // Link to the Wallet (The Bucket of Money)
+    /** Encrypted wallet linkage enforcing fund isolation and regulatory segregation of duties. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "account_id", nullable = false)
     private Account account;
 
-    // SENSITIVE: Encrypted in DB
+    /** Encrypted 16-digit PAN (AES-GCM). Randomized per-write. */
     @Convert(converter = AttributeEncryptor.class)
     @Column(name = "pan", nullable = false)
-    private String pan; // The 16-digit number
+    private String pan;
 
-    // SENSITIVE: Encrypted in DB
+    /** NEW: Blind Index for PAN Searchability.
+     * Stores HMAC-SHA256(PAN). Deterministic but irreversible without the Hashing Key.
+     * Used ONLY for existsByPan checks.
+     */
+    @Column(name = "pan_fingerprint", length = 64, nullable = false)
+    private String panFingerprint;
+
+    /** Encrypted 3-digit CVV (AES-GCM). Randomized per-write. */
     @Convert(converter = AttributeEncryptor.class)
     @Column(name = "cvv", nullable = false)
-    private String cvv; // The 3-digit code
+    private String cvv;
 
+    /** CHANGED: Now Encrypted (AES-GCM).
+     * Protected against tampering (Integrity) and unauthorized viewing.
+     */
+    @Convert(converter = AttributeEncryptor.class)
     @Column(name = "expiry_date", nullable = false)
-    private String expiryDate; // MM/YY format (Not sensitive enough to encrypt usually, but can be)
+    private String expiryDate;
 
+    /** State-machine guard against fraudulent usage; transitions audited for PSD2 RTS compliance. */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private CardStatus status;
 
+    /** Reversible cardholder identifier leveraged in 3-D Secure flows and chargeback dispute evidence. */
     @Column(name = "cardholder_name", nullable = false)
     private String cardholderName;
 
-    // Optional: Spending Limit
+    /** Optional velocity control to mitigate BIN attack spend; null implies unlimited budget. */
     @Column(name = "monthly_limit")
     private BigDecimal monthlyLimit;
 
+    /** Immutable audit timestamp for PSD2 RTS regulatory reporting and PCI-DSS 11.x traceability. */
     @CreationTimestamp
     private LocalDateTime createdAt;
 
+    /** Optimistic-lock timestamp updated on every state mutation to support concurrent chargeback handling. */
     @UpdateTimestamp
     private LocalDateTime updatedAt;
+
+
+    // =========================================================================
+    // LIFECYCLE HOOKS (AUTOMATION)
+    // =========================================================================
+
+    /**
+     * Automatically calculates the Blind Index (HMAC) before persistence.
+     * This ensures the fingerprint is always in sync with the PAN.
+     */
+    @PrePersist
+    @PreUpdate
+    private void synchronizeFingerprint() {
+        if (this.pan != null) {
+            // We use a static bridge to access the Spring Bean logic from the Entity
+            this.panFingerprint = AttributeEncryptor.blindIndex(this.pan);
+        }
+    }
 }

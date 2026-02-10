@@ -19,7 +19,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.util.concurrent.TimeoutException;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
@@ -159,7 +158,7 @@ class ExchangeRateIntegrationTest {
     /// @throws InterruptedException if the thread sleep during the test is interrupted
     @Test
     @DisplayName("Cache Policy: Should ignore stale cache and refetch from API")
-    void shouldRefreshStaleCache() throws InterruptedException {
+    void shouldRefreshStaleCache() throws Exception { // Added 'throws Exception'
         stubFor(get(urlPathMatching("/v6/test-dummy-key/latest/USD"))
                 .willReturn(aResponse()
                         .withStatus(200)
@@ -172,14 +171,38 @@ class ExchangeRateIntegrationTest {
                             }
                         """)));
 
-        String cacheKey = "exchange_rates::USD-EUR";
-        redisTemplate.opsForValue().set(cacheKey, new BigDecimal("0.85"), Duration.ofMillis(1000));
+        // FIX: We must write the Cache Entry in the format @Cacheable expects (JDK Binary).
+        // Since our RedisTemplate is configured for JSON, we bypass it and use the raw connection.
 
+        // 1. Prepare Key (Spring Cache default format: "cacheName::key")
+        byte[] keyBytes = "exchange_rates::USD-EUR".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        // 2. Prepare Value (Standard Java Serialization)
+        byte[] valBytes = serializeToJdk(new BigDecimal("0.85"));
+
+        // 3. Write directly to Redis (PSETEX = Set with Millisecond TTL)
+        // TTL = 1000ms
+        redisTemplate.getConnectionFactory().getConnection()
+                .pSetEx(keyBytes, 1000, valBytes);
+
+        // 4. Wait for TTL to expire (1.1s)
         Thread.sleep(1100);
 
+        // Act
         BigDecimal rate = exchangeService.getRate("USD", "EUR");
+
+        // Assert
         assertThat(rate).isEqualByComparingTo("0.90");
         verify(1, getRequestedFor(urlPathMatching("/v6/test-dummy-key/latest/USD")));
+    }
+
+    // --- Helper: Mimics Spring's Default Cache Serialization ---
+    private byte[] serializeToJdk(Object object) throws java.io.IOException {
+        java.io.ByteArrayOutputStream byteStream = new java.io.ByteArrayOutputStream();
+        java.io.ObjectOutputStream objectStream = new java.io.ObjectOutputStream(byteStream);
+        objectStream.writeObject(object);
+        objectStream.flush();
+        return byteStream.toByteArray();
     }
 
     /// Tests the behavior of the exchange rate service when the external API returns an HTTP 500 error.

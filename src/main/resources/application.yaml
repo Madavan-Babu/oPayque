@@ -64,7 +64,23 @@ application:
 # =========================================================================
 opayque:
   security:
-    # The Master Key for the AES-256 Vault.
-    # In PROD, inject this via Environment Variable: ENCRYPTION_KEY
-    # It will be Hashed by SHA-256, so length doesn't strictly matter here.
-    encryption-key: ${ENCRYPTION_KEY:MySuperSecretKeyForEncryption!!}
+    # ROTATION STRATEGY:
+    # We support multiple active keys.
+    # - 'active-version': The key used for NEW writes (Encryption).
+    # - 'keys': A map of ALL valid keys used for reads (Decryption).
+    #
+    # To Rotate:
+    # 1. Add "v2" to 'keys'.
+    # 2. Set 'active-version' to 2.
+    # 3. Restart. (Old data decrypts with v1, new writes use v2).
+    active-version: 1
+    keys:
+      1: ${ENCRYPTION_KEY_V1:MySuperSecretKeyForEncryptionV1!!}
+
+    # HMAC Key (Blind Indexing) - Stays single for now (Harder to rotate)
+    hashing-key: ${HASHING_KEY:MySuperSecretKeyForhashing!!}
+
+  # Story 4.2 Card Factory Configuration
+  card:
+    bin-prefix: "171103"
+    expiry-years: 3

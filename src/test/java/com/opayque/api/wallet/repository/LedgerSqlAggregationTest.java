@@ -3,6 +3,8 @@ package com.opayque.api.wallet.repository;
 import com.opayque.api.identity.entity.Role;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
+import com.opayque.api.infrastructure.config.OpayqueSecurityProperties;
+import com.opayque.api.infrastructure.encryption.AttributeEncryptor;
 import com.opayque.api.wallet.entity.Account;
 import com.opayque.api.wallet.entity.LedgerEntry;
 import com.opayque.api.wallet.entity.TransactionType;
@@ -11,6 +13,7 @@ import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
@@ -39,6 +42,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 ///
 @DataJpaTest
 @ActiveProfiles("test")
+// FIX: Explicitly load the Encryption Infrastructure.
+// @DataJpaTest excludes these by default, but our Entities (VirtualCard) now depend on them.
+@Import({OpayqueSecurityProperties.class, AttributeEncryptor.class})
 class LedgerSqlAggregationTest {
 
     @Autowired

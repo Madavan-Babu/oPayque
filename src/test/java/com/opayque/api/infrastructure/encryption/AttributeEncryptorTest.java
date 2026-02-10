@@ -1,19 +1,44 @@
 package com.opayque.api.infrastructure.encryption;
 
+import com.opayque.api.infrastructure.config.OpayqueSecurityProperties;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
+
+import javax.crypto.Cipher;
+import javax.crypto.Mac;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.SecretKeySpec;
+import java.lang.reflect.Field;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 
 
 /**
- * Epic 4: Cryptographic Assurance for PCI-DSS Compliance.
+ * Epic 4: Cryptographic Assurance for PCI-DSS Compliance (V2 - Fortress Edition).
  * <p>
- * Isolated unit tests for the {@link AttributeEncryptor} AES-256-GCM attribute converter.
- * Validates that sensitive FinTech attributes (e.g., PAN, CVV, mobile money wallet IDs)
- * remain mathematically reversible, key-derivation stable, and resilient to edge cases
- * across microservice restarts and rolling deployments.
+ * Comprehensive unit-test suite for the refactored {@link AttributeEncryptor}.
+ * Validates AES-256-GCM, PBKDF2 key-derivation, blind indexing, and key-rotation logic.
  * </p>
  *
  * @author Madavan Babu
@@ -21,204 +46,611 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class AttributeEncryptorTest {
 
-    private static final String TEST_SECRET = "MySuperSecretKeyForTesting123!";
+    private AttributeEncryptor encryptor;
+    private static final String KEY_V1 = "Passphrase_Number_One_For_Testing!";
+    private static final String KEY_V2 = "Passphrase_Number_Two_For_Rotation!";
+    private static final String HASH_KEY = "Blind_Index_Hashing_Key_For_Tests!";
 
-    // We instantiate it manually to test logic without Spring Context overhead
-    private final AttributeEncryptor encryptor = new AttributeEncryptor(TEST_SECRET);
 
-    /**
-     * Validates end-to-end cryptographic reversibility for a standard FinTech PAN.
-     * <p>
-     * Ensures that after AES-256-GCM encryption the ciphertext is base64-encoded
-     * for safe persistence in PostgreSQL and that subsequent decryption yields
-     * the identical plaintext, satisfying PCI-DSS requirement 3.4.
-     * </p>
-     */
-    @Test
-    @DisplayName("Happy Path: Should encrypt and decrypt data correctly")
-    void shouldEncryptAndDecryptSuccessfully() {
-        String originalPan = "4000123456789010";
-
-        // 1. Encrypt
-        String encrypted = encryptor.convertToDatabaseColumn(originalPan);
-
-        // Assert it is NOT the original text (Obfuscation Check)
-        assertThat(encrypted).isNotEqualTo(originalPan);
-        assertThat(encrypted).isBase64(); // Must be DB-safe format
-
-        // 2. Decrypt
-        String decrypted = encryptor.convertToEntityAttribute(encrypted);
-
-        // Assert it matches the original exactly
-        assertThat(decrypted).isEqualTo(originalPan);
-    }
+    private OpayqueSecurityProperties props; // Store this to modify it in tests
 
     /**
-     * Proves deterministic key derivation across JVM restarts.
-     * <p>
-     * Simulates a rolling deployment where a new pod instance must decrypt
-     * ciphertext produced by its predecessor. Success confirms that the
-     * PBKDF2-HMAC-SHA-256 key derivation is stable and reproducible.
-     * </p>
+     * Instantiates the encryptor with two key versions and a hashing key for blind indexing.
+     * Mimics a PCI-DSS compliant key-vault rotation scenario.
      */
-    @Test
-    @DisplayName("Determinism: Two instances with SAME key should interoperate")
-    void shouldInteroperateBetweenInstances() {
-        // Simulate a Server Restart: New instance, same config
-        AttributeEncryptor instanceA = new AttributeEncryptor(TEST_SECRET);
-        AttributeEncryptor instanceB = new AttributeEncryptor(TEST_SECRET);
+    @BeforeEach
+    void setUp() throws Exception {
+        // 1. Create Config POJO
+        props = new OpayqueSecurityProperties();
+        props.setActiveVersion(1);
+        props.setHashingKey(HASH_KEY);
 
-        String data = "Sensitive-CVV-123";
+        Map<Integer, String> keyMap = new HashMap<>();
+        keyMap.put(1, KEY_V1);
+        keyMap.put(2, KEY_V2);
+        props.setKeys(keyMap);
 
-        // Encrypt with A
-        String cipherText = instanceA.convertToDatabaseColumn(data);
-
-        // Decrypt with B
-        String plainText = instanceB.convertToEntityAttribute(cipherText);
-
-        // This proves SHA-256 derivation is stable across restarts
-        assertThat(plainText).isEqualTo(data);
+        // 2. Inject via Constructor (No Reflection needed!)
+        encryptor = new AttributeEncryptor(props);
+        encryptor.init();
     }
 
+
+    // =========================================================================
+    // 1. CORE ENCRYPTION / DECRYPTION
+    // =========================================================================
     /**
-     * Ensures null safety for optional JPA columns.
-     * <p>
-     * Confirms that the converter propagates nulls without throwing
-     * {@link NullPointerException}, maintaining data integrity when
-     * FinTech entities contain nullable encrypted fields.
-     * </p>
+     * Validates core cryptographic correctness: round-trip encryption, null safety,
+     * deterministic randomness via unique IVs, and empty-string handling.
      */
-    @Test
-    @DisplayName("Safety: Should handle NULLs gracefully")
-    void shouldHandleNulls() {
-        // JPA often passes nulls for optional columns
-        assertThat(encryptor.convertToDatabaseColumn(null)).isNull();
-        assertThat(encryptor.convertToEntityAttribute(null)).isNull();
-    }
+    @Nested
+    @DisplayName("Core Crypto Operations")
+    class CoreOperations {
 
-    /**
-     * Validates correct handling of empty plaintext.
-     * <p>
-     * Guarantees that encrypting an empty string produces a valid ciphertext
-     * and that decrypting it returns an empty string, preserving data
-     * consistency for edge-case FinTech records.
-     * </p>
-     */
-    @Test
-    @DisplayName("Edge Case: Should handle Empty Strings")
-    void shouldHandleEmptyStrings() {
-        String empty = "";
+        /**
+         * Ensures a 16-digit PAN is encrypted to a non-equal Base64 string and
+         * successfully decrypted back to the original value.
+         */
+        @Test
+        @DisplayName("Happy Path: Should encrypt and decrypt valid data")
+        void testEncryptionWithValidData() {
+            String original = "4000123456789010";
+            String encrypted = encryptor.convertToDatabaseColumn(original);
 
-        String encrypted = encryptor.convertToDatabaseColumn(empty);
-        String decrypted = encryptor.convertToEntityAttribute(encrypted);
+            assertThat(encrypted).isNotNull().isNotEqualTo(original);
 
-        assertThat(decrypted).isEqualTo(empty);
-    }
-
-    /**
-     * Demonstrates cryptographic key separation.
-     * <p>
-     * Attempting to decrypt ciphertext with a differing key must yield
-     * an {@link IllegalStateException}, proving that the AES-GCM tag
-     * verification correctly rejects tampered or mis-keyed data, thereby
-     * upholding PCI-DSS requirement 3.5.
-     * </p>
-     */
-    @Test
-    @DisplayName("Key Mismatch: Should fail to decrypt if key changes")
-    void shouldFailIfKeyIsWrong() {
-        AttributeEncryptor correctKey = new AttributeEncryptor("Key-A");
-        AttributeEncryptor wrongKey = new AttributeEncryptor("Key-B");
-
-        String data = "Secret";
-        String cipherText = correctKey.convertToDatabaseColumn(data);
-
-        // Attempting to decrypt with the wrong key must fail
-        // Usually throws IllegalStateException (wrapped javax.crypto.BadPaddingException)
-        assertThatThrownBy(() -> wrongKey.convertToEntityAttribute(cipherText))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Error decrypting");
-    }
-
-  /**
-   * Validates defensive failure handling when AES-256-GCM encryption materially fails.
-   *
-   * <p>Simulates a catastrophic runtime condition—such as an invalidated secret key or corrupted
-   * PBKDF2-derived key material—that would otherwise propagate low-level {@link
-   * IllegalStateException} or provider-specific exceptions. The converter is required
-   * to catch any such failure, log it securely (no key leakage), and re-throw a domain-level {@link
-   * IllegalStateException} with a sanitized message. This guarantees that upstream JPA or service
-   * layers never observe sensitive stack traces, maintaining PCI-DSS requirement 6.5 (secure error
-   * handling) and OWASP API Security Top 10 resilience.
-   *
-   * @throws Exception reflection-related exceptions during test sabotage
-   */
-  @Test
-  @DisplayName("Error Handling: Should wrap internal crypto errors during Encryption")
-  void shouldWrapEncryptionErrors() throws Exception {
-        // 1. Setup a valid encryptor
-        AttributeEncryptor encryptor = new AttributeEncryptor("ValidKey123");
-
-        // 2. Sabotage: Use Reflection to corrupt the internal 'key'
-        // This forces cipher.init() to fail (usually with InvalidKeyException)
-        java.lang.reflect.Field keyField = AttributeEncryptor.class.getDeclaredField("key");
-        keyField.setAccessible(true);
-        keyField.set(encryptor, null); // <--- The Sabotage
-
-        // 3. Act & Assert
-        // We expect the class to catch the internal error and rethrow it as IllegalStateException
-        assertThatThrownBy(() -> encryptor.convertToDatabaseColumn("SensitiveData"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Error encrypting sensitive data");
-    }
-
-  /**
-   * Validates cryptographic resilience under extreme JVM mis-configuration.
-   *
-   * <p>This test simulates a hostile or corrupted runtime where the SHA-256 MessageDigest provider
-   * has been removed—an event that would silently break PBKDF2-based key derivation and render all
-   * encrypted FinTech attributes (PAN, CVV, wallet IDs) unreadable. By asserting that the {@link
-   * AttributeEncryptor} constructor fails fast with an {@link IllegalStateException} whose cause is
-   * {@link java.security.NoSuchAlgorithmException}, we prove that the microservice will refuse to
-   * start rather than operate in an insecure state. This behavior is mandatory for PCI-DSS
-   * requirement 6.5 (secure error handling) and OWASP API Security Top 10 (cryptographic failures).
-   * The test also guarantees deterministic restoration of security providers, ensuring subsequent
-   * test suites are not poisoned by provider registry manipulation.
-   *
-   * @throws IllegalStateException if the encryptor incorrectly tolerates a missing SHA-256
-   *     implementation
-   * @throws SecurityException if provider removal/addition is denied by the JVM
-   */
-  @Test
-  @DisplayName("Critical Failure: Should crash if SHA-256 is missing from JVM")
-  void shouldThrowIfSha256IsMissing() {
-        // 1. Identification: Find which Provider is giving us "SHA-256" (usually "SUN")
-        java.security.Provider[] providers = java.security.Security.getProviders("MessageDigest.SHA-256");
-
-        // Guard: If the JVM is already broken/weird, skip or fail.
-        if (providers == null || providers.length == 0) {
-            // This arguably shouldn't happen in a standard JDK, but good safety.
-            return;
+            // Decrypt
+            String decrypted = encryptor.convertToEntityAttribute(encrypted);
+            assertThat(decrypted).isEqualTo(original);
         }
 
-        try {
-            // 2. The Heist: Remove all providers that offer SHA-256
-            for (java.security.Provider provider : providers) {
-                java.security.Security.removeProvider(provider.getName());
-            }
+        /**
+         * Confirms that null plaintext and null ciphertext are handled without NPE,
+         * satisfying OWASP ASVS 8.3 null-safety requirements.
+         */
+        @Test
+        @DisplayName("Null Safety: Should return null for null inputs")
+        void testEncryptionWithNullInput() {
+            assertThat(encryptor.convertToDatabaseColumn(null)).isNull();
+            assertThat(encryptor.convertToEntityAttribute(null)).isNull();
+        }
 
-            // 3. The Attempt: Initialize the class. It should panic.
-            assertThatThrownBy(() -> new AttributeEncryptor("SecretKey"))
+        /**
+         * Verifies that empty strings are encrypted and decrypted deterministically,
+         * ensuring no data loss or trimming side effects.
+         */
+        @Test
+        @DisplayName("Empty Strings: Should handle empty strings correctly")
+        void testEncryptionWithEmptyString() {
+            String empty = "";
+            String encrypted = encryptor.convertToDatabaseColumn(empty);
+            assertThat(encryptor.convertToEntityAttribute(encrypted)).isEqualTo(empty);
+        }
+
+        /**
+         * Confirms that identical plaintext produces distinct ciphertexts due to
+         * random 96-bit IVs, a mandatory property for GCM semantic security.
+         */
+        @Test
+        @DisplayName("Randomness: Same plaintext must produce DIFFERENT ciphertext (IV Uniqueness)")
+        void testEncryptionGeneratesUniqueOutput() {
+            String data = "SensitiveData";
+            String enc1 = encryptor.convertToDatabaseColumn(data);
+            String enc2 = encryptor.convertToDatabaseColumn(data);
+
+            assertThat(enc1).isNotEqualTo(enc2);
+
+            // Both should decrypt to the same value
+            assertThat(encryptor.convertToEntityAttribute(enc1)).isEqualTo(data);
+            assertThat(encryptor.convertToEntityAttribute(enc2)).isEqualTo(data);
+        }
+    }
+
+    // =========================================================================
+    // 2. INTEGRITY & TAMPERING (AES-GCM)
+    // =========================================================================
+    /**
+     * Ensures AES-GCM authentication tags reject tampered or truncated ciphertext,
+     * fulfilling PCI-DSS requirement 4.1 for data integrity.
+     */
+    @Nested
+    @DisplayName("Integrity & Security")
+    class IntegrityTests {
+
+        /**
+         * Flips one bit in the authentication tag and asserts that decryption
+         * throws an integrity violation, proving GCM tag verification.
+         */
+        @Test
+        @DisplayName("Tampering: Should fail if ciphertext is modified (GCM Auth Tag Check)")
+        void testDecryptionWithModifiedCiphertext() {
+            String original = "Don'tTouchMe";
+            String encryptedBase64 = encryptor.convertToDatabaseColumn(original);
+
+            // Decode, flip a bit, Re-encode
+            byte[] bytes = Base64.getDecoder().decode(encryptedBase64);
+            bytes[bytes.length - 1] ^= 1; // Flip the last bit of Auth Tag
+            String corruptedBase64 = Base64.getEncoder().encodeToString(bytes);
+
+            assertThatThrownBy(() -> encryptor.convertToEntityAttribute(corruptedBase64))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Encryption setup failed") // The outer exception
-                    .hasCauseInstanceOf(java.security.NoSuchAlgorithmException.class); // The root cause
+                    .hasMessageContaining("Data Integrity Violation");
+            // Matches the "AEADBadTagException" catch block
+        }
 
-        } finally {
-            // 4. The Restoration: PUT THEM BACK!
-            // If we don't do this, every subsequent test in the suite will fail.
-            for (java.security.Provider provider : providers) {
-                java.security.Security.addProvider(provider);
+        /**
+         * Truncates the ciphertext and expects an IllegalStateException,
+         * validating that short payloads are rejected before tag verification.
+         */
+        @Test
+        @DisplayName("Truncation: Should fail if data is incomplete")
+        void testDecryptionWithTruncatedData() {
+            String encrypted = encryptor.convertToDatabaseColumn("ShortData");
+            String truncated = encrypted.substring(0, encrypted.length() - 5);
+
+            assertThatThrownBy(() -> encryptor.convertToEntityAttribute(truncated))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    // =========================================================================
+    // 3. KEY ROTATION & VERSIONING
+    // =========================================================================
+    /**
+     * Simulates cryptographic key rotation mandated by PCI-DSS 3.5.3,
+     * ensuring decryptability of data encrypted under retired keys.
+     */
+    @Nested
+    @DisplayName("Key Rotation & Versioning")
+    class RotationTests {
+
+
+        /**
+         * Encrypts with V1, rotates to V2, and verifies that both old and new
+         * ciphertexts remain decryptable, demonstrating zero-downtime rotation.
+         */
+        @Test
+        @DisplayName("Rotation: Should decrypt data encrypted with Old Key (V1) while V2 is active")
+        void testDecryptionAcrossKeyVersions() throws Exception {
+            // 1. V1 is active (from setUp)
+            String v1Ciphertext = encryptor.convertToDatabaseColumn("OldSecret");
+
+            // 2. Rotate Keys: Update POJO and Re-init
+            props.setActiveVersion(2);
+            encryptor.init();
+
+            // 3. Assert New Writes use V2
+            String newCiphertext = encryptor.convertToDatabaseColumn("NewSecret");
+            byte[] newBytes = Base64.getDecoder().decode(newCiphertext);
+            assertThat(newBytes[0]).isEqualTo((byte) 2);
+
+            // 4. Assert Old Reads still work (V1)
+            assertThat(encryptor.convertToEntityAttribute(v1Ciphertext)).isEqualTo("OldSecret");
+        }
+
+        /**
+         * Crafts a payload with an unmapped version byte (99) and asserts
+         * an informative error, preventing downgrade attacks.
+         */
+        @Test
+        @DisplayName("Unknown Version: Should fail if version byte is not in KeyStore")
+        void testDecryptionWithUnknownKeyVersion() {
+            // Manually construct a payload with Version 99
+            byte[] maliciousPayload = new byte[20];
+            maliciousPayload[0] = (byte) 99; // Version 99
+            String badData = Base64.getEncoder().encodeToString(maliciousPayload);
+
+            assertThatThrownBy(() -> encryptor.convertToEntityAttribute(badData))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Unknown Key Version: 99");
+        }
+
+        /**
+         * Attempts to initialize with an active version whose key is absent,
+         * expecting a clear exception to avoid silent failures.
+         */
+        @Test
+        void testEncryptionWithMissingActiveKey() throws Exception {
+            // Set invalid version
+            props.setActiveVersion(5);
+
+            assertThatThrownBy(() -> encryptor.init())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Active Key Version 5 not found");
+        }
+    }
+
+    // =========================================================================
+    // 4. BLIND INDEXING
+    // =========================================================================
+    /**
+     * Validates the HMAC-SHA256 blind index used for PAN existence checks
+     * without revealing plaintext, satisfying PCI-DSS 3.4.1 one-way hashing.
+     */
+    @Nested
+    @DisplayName("Blind Indexing")
+    class BlindIndexTests {
+
+        /**
+         * Asserts that identical PANs always yield identical fingerprints,
+         * enabling idempotent duplicate checks.
+         */
+        @Test
+        @DisplayName("Consistency: Same Input -> Same Hash (Deterministic)")
+        void testBlindIndexConsistency() {
+            String pan = "4111222233334444";
+            String hash1 = AttributeEncryptor.blindIndex(pan);
+            String hash2 = AttributeEncryptor.blindIndex(pan);
+
+            assertThat(hash1).isEqualTo(hash2);
+        }
+
+        /**
+         * Ensures that differing inputs produce differing hashes,
+         * minimizing collision probability under the birthday bound.
+         */
+        @Test
+        @DisplayName("Uniqueness: Different Input -> Different Hash")
+        void testBlindIndexWithDifferentInputs() {
+            String hash1 = AttributeEncryptor.blindIndex("A");
+            String hash2 = AttributeEncryptor.blindIndex("B");
+
+            assertThat(hash1).isNotEqualTo(hash2);
+        }
+
+        /**
+         * Confirms that null input triggers an exception, enforcing
+         * fail-fast semantics for indexing misuse.
+         */
+        @Test
+        @DisplayName("Null Safety: Should throw or handle nulls (Design choice: Fail fast or return null)")
+        void testBlindIndexWithNullInput() {
+            // Based on your implementation, computeHmac(null) would throw NPE or similar
+            // Let's assume we want to fail fast if someone tries to index a NULL pan
+            assertThatThrownBy(() -> AttributeEncryptor.blindIndex(null))
+                    .isInstanceOf(Exception.class);
+        }
+    }
+
+    // =========================================================================
+    // 5. EDGE CASES & CONCURRENCY
+    // =========================================================================
+    /**
+     * Covers Unicode payloads, 4-KB large data, and concurrent load to ensure
+     * thread-safety and robustness under FinTech traffic spikes.
+     */
+    @Nested
+    @DisplayName("Edge Cases & Load")
+    class EdgeCases {
+
+        /**
+         * Encrypts and decrypts multilingual and emoji payloads to confirm
+         * UTF-8 byte preservation across the AES-GCM cipher.
+         */
+        @ParameterizedTest
+        @DisplayName("Unicode: Should handle Emoji and International characters")
+        @ValueSource(strings = {"Hello World", "你好", "🔒💳💰", "مرحبا"})
+        void testUnicodeDataEncryption(String input) {
+            String enc = encryptor.convertToDatabaseColumn(input);
+            String dec = encryptor.convertToEntityAttribute(enc);
+            assertThat(dec).isEqualTo(input);
+        }
+
+        /**
+         * Encrypts a 4-KB string to verify that the implementation handles
+         * large blobs without buffer overflows or performance degradation.
+         */
+        @Test
+        @DisplayName("Large Data: Should handle larger payloads (e.g. 4KB)")
+        void testLargeDataEncryption() {
+            String largeString = "A".repeat(4096); // 4KB
+            String enc = encryptor.convertToDatabaseColumn(largeString);
+            String dec = encryptor.convertToEntityAttribute(enc);
+            assertThat(dec).isEqualTo(largeString);
+        }
+
+        /**
+         * Spins 20 threads × 100 iterations to assert zero decryption mismatches,
+         * proving thread-safety of the singleton encryptor.
+         */
+        @Test
+        @DisplayName("Concurrency: Should be thread-safe under load")
+        void testConcurrentEncryption() throws InterruptedException {
+            int threads = 20;
+            int iterations = 100;
+            ExecutorService executor = Executors.newFixedThreadPool(threads);
+            CountDownLatch latch = new CountDownLatch(threads);
+            AtomicInteger failures = new AtomicInteger(0);
+
+            for (int i = 0; i < threads; i++) {
+                executor.submit(() -> {
+                    try {
+                        for (int j = 0; j < iterations; j++) {
+                            String data = "ThreadData-" + Thread.currentThread().getId() + "-" + j;
+                            String enc = encryptor.convertToDatabaseColumn(data);
+                            String dec = encryptor.convertToEntityAttribute(enc);
+                            if (!data.equals(dec)) {
+                                failures.incrementAndGet();
+                            }
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        failures.incrementAndGet();
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+            }
+
+            latch.await(5, TimeUnit.SECONDS);
+            executor.shutdown();
+
+            assertThat(failures.get()).isEqualTo(0);
+        }
+    }
+
+    // =========================================================================
+    // 6. CODE COVERAGE: ERROR HANDLING & CONFIG VALIDATION
+    // =========================================================================
+    /**
+     * Exercises failure paths: missing config, KDF/Cipher/Mac exceptions,
+     * and uninitialized state to guarantee robust error messages.
+     */
+    @Nested
+    @DisplayName("Corner Cases & Error Handling")
+    class ErrorHandlingTests {
+
+        // --- Lines 1-3: Configuration Validation ---
+
+        /**
+         * Initializes with a null active-version and expects a clear message
+         * to avoid silent misconfigurations in production vaults.
+         */
+        @Test
+        @DisplayName("Init: Should fail if Active Version is NULL")
+        void init_MissingActiveVersion() {
+            OpayqueSecurityProperties badProps = new OpayqueSecurityProperties();
+            badProps.setKeys(Map.of(1, KEY_V1));
+            badProps.setHashingKey(HASH_KEY);
+            // activeVersion is null by default
+
+            AttributeEncryptor badEngine = new AttributeEncryptor(badProps);
+
+            assertThatThrownBy(badEngine::init)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("active-version is missing");
+        }
+
+        /**
+         * Mocks Mac.doFinal to throw RuntimeException and verifies that the
+         * generic catch block wraps it as IllegalStateException.
+         */
+        @Test
+        @DisplayName("Blind Index: Should handle Unexpected Errors (Generic Catch)")
+        void blindIndex_UnexpectedError() {
+            encryptor.init(); // Ensure INSTANCE is ready
+
+            // 1. Create a Mock Mac that throws RuntimeException on execution
+            // (This triggers the generic 'catch (Exception e)' block)
+            Mac macMock = Mockito.mock(Mac.class);
+            Mockito.when(macMock.doFinal(any())).thenThrow(new RuntimeException("Unexpected Crash"));
+
+            // 2. Mock the Static Factory to return our ticking time-bomb
+            try (MockedStatic<Mac> mockStaticMac = Mockito.mockStatic(Mac.class)) {
+                mockStaticMac.when(() -> Mac.getInstance(anyString())).thenReturn(macMock);
+
+                // 3. Execute and Assert
+                assertThatThrownBy(() -> AttributeEncryptor.blindIndex("Data"))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("HMAC Calculation Failed") // Matches your throw
+                        .hasRootCauseMessage("Unexpected Crash");
             }
         }
-  }
+
+        /**
+         * Tests both null and empty key maps to ensure early failure with
+         * descriptive messages for DevSecOps diagnostics.
+         */
+        @Test
+        @DisplayName("Init: Should fail if Keys Map is NULL or Empty")
+        void init_MissingKeys() {
+            // Case 1: Null Keys
+            OpayqueSecurityProperties nullKeys = new OpayqueSecurityProperties();
+            nullKeys.setActiveVersion(1);
+            nullKeys.setHashingKey(HASH_KEY);
+            nullKeys.setKeys(null);
+
+            assertThatThrownBy(() -> new AttributeEncryptor(nullKeys).init())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("keys is empty or missing");
+
+            // Case 2: Empty Keys
+            OpayqueSecurityProperties emptyKeys = new OpayqueSecurityProperties();
+            emptyKeys.setActiveVersion(1);
+            emptyKeys.setHashingKey(HASH_KEY);
+            emptyKeys.setKeys(Collections.emptyMap());
+
+            assertThatThrownBy(() -> new AttributeEncryptor(emptyKeys).init())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("keys is empty or missing");
+        }
+
+        /**
+         * Omits the hashing key and asserts that blind-index initialization
+         * fails fast, preventing silent PAN leakage.
+         */
+        @Test
+        @DisplayName("Init: Should fail if Hashing Key is NULL")
+        void init_MissingHashingKey() {
+            OpayqueSecurityProperties noHash = new OpayqueSecurityProperties();
+            noHash.setActiveVersion(1);
+            noHash.setKeys(Map.of(1, KEY_V1));
+            // hashingKey is null
+
+            assertThatThrownBy(() -> new AttributeEncryptor(noHash).init())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("hashing-key is missing");
+        }
+
+        // --- Line 4: KDF Failure (SecretKeyFactory) ---
+
+        /**
+         * Mocks SecretKeyFactory to throw NoSuchAlgorithmException and ensures
+         * the KDF failure is wrapped with a clear message.
+         */
+        @Test
+        @DisplayName("KDF: Should wrap NoSuchAlgorithmException")
+        void deriveKey_KdfFailure() {
+            // We mock the static SecretKeyFactory to throw an exception even with valid inputs
+            try (MockedStatic<SecretKeyFactory> mockFactory = Mockito.mockStatic(SecretKeyFactory.class)) {
+                mockFactory.when(() -> SecretKeyFactory.getInstance(anyString()))
+                        .thenThrow(new NoSuchAlgorithmException("Forced KDF Error"));
+
+                // Attempting to init will trigger deriveKey()
+                OpayqueSecurityProperties props = new OpayqueSecurityProperties();
+                props.setActiveVersion(1);
+                props.setKeys(Map.of(1, KEY_V1));
+                props.setHashingKey(HASH_KEY);
+
+                AttributeEncryptor engine = new AttributeEncryptor(props);
+
+                assertThatThrownBy(engine::init)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("KDF Failure")
+                        .hasRootCauseInstanceOf(NoSuchAlgorithmException.class);
+            }
+        }
+
+        // --- Line 5: Encryption Failures (Cipher) ---
+
+        /**
+         * Injects an incompatible DES key into the key store to trigger
+         * InvalidKeyException during AES cipher init.
+         */
+        @Test
+        @DisplayName("Encryption: Should handle InvalidKeyException")
+        void encrypt_InvalidKeyException() {
+            // 1. Initialize normally
+            encryptor.init();
+
+            // 2. Corrupt the key store via reflection to force InvalidKeyException during Cipher.init
+            // We insert a key that is valid Java object but has an invalid algorithm for AES/GCM
+            try {
+                Field keyStoreField = AttributeEncryptor.class.getDeclaredField("keyStore");
+                keyStoreField.setAccessible(true);
+                Map<Byte, SecretKey> keyStore = (Map<Byte, SecretKey>) keyStoreField.get(encryptor);
+
+                // "DES" key cannot be used with "AES" Cipher -> throws InvalidKeyException
+                SecretKey badKey = new SecretKeySpec(new byte[8], "DES");
+                keyStore.put((byte) 1, badKey);
+
+                assertThatThrownBy(() -> encryptor.convertToDatabaseColumn("Data"))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Encryption Key Error")
+                        .hasRootCauseInstanceOf(InvalidKeyException.class);
+
+            } catch (Exception e) {
+                throw new RuntimeException("Reflection failed", e);
+            }
+        }
+
+        /**
+         * Mocks Cipher.getInstance to throw NoSuchPaddingException and
+         * verifies that encryption system failures are wrapped appropriately.
+         */
+        @Test
+        @DisplayName("Encryption: Should handle GeneralSecurityException")
+        void encrypt_SystemFailure() {
+            // Force Cipher.getInstance() to throw
+            try (MockedStatic<Cipher> mockCipher = Mockito.mockStatic(Cipher.class)) {
+                mockCipher.when(() -> Cipher.getInstance(anyString()))
+                        .thenThrow(new javax.crypto.NoSuchPaddingException("System integrity lost"));
+
+                assertThatThrownBy(() -> encryptor.convertToDatabaseColumn("Data"))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Encryption System Failure");
+            }
+        }
+
+        /**
+         * Forces a RuntimeException during cipher instantiation to ensure
+         * all unforeseen encryption errors are captured.
+         */
+        @Test
+        @DisplayName("Encryption: Should handle Unexpected Runtime Exceptions")
+        void encrypt_UnexpectedFailure() {
+            try (MockedStatic<Cipher> mockCipher = Mockito.mockStatic(Cipher.class)) {
+                mockCipher.when(() -> Cipher.getInstance(anyString()))
+                        .thenThrow(new RuntimeException("Total Collapse"));
+
+                assertThatThrownBy(() -> encryptor.convertToDatabaseColumn("Data"))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Encryption Failed");
+            }
+        }
+
+        // --- Line 6: Engine Not Ready ---
+
+        /**
+         * Nullifies the static INSTANCE field and asserts that blind-index
+         * calls fail with an informative message when the engine is uninitialized.
+         */
+        @Test
+        @DisplayName("Blind Index: Should fail if Engine not initialized (Static State)")
+        void blindIndex_NotReady() throws Exception {
+            // 1. Force INSTANCE to null (simulate Pre-Init state)
+            Field instanceField = AttributeEncryptor.class.getDeclaredField("INSTANCE");
+            instanceField.setAccessible(true);
+            instanceField.set(null, null);
+
+            assertThatThrownBy(() -> AttributeEncryptor.blindIndex("Data"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Engine not ready");
+        }
+
+        // --- Line 7: HMAC Failures (Mac) ---
+
+        /**
+         * Mocks Mac.getInstance to throw NoSuchAlgorithmException and
+         * ensures the blind-index reports “HMAC Algorithm Not Found”.
+         */
+        @Test
+        @DisplayName("Blind Index: Should handle Missing Algorithm")
+        void blindIndex_NoSuchAlgorithm() {
+            encryptor.init(); // Ensure INSTANCE is set
+
+            try (MockedStatic<Mac> mockMac = Mockito.mockStatic(Mac.class)) {
+                mockMac.when(() -> Mac.getInstance(anyString()))
+                        .thenThrow(new NoSuchAlgorithmException("HMAC Missing"));
+
+                assertThatThrownBy(() -> AttributeEncryptor.blindIndex("Data"))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("HMAC Algorithm Not Found");
+            }
+        }
+
+        /**
+         * Mocks Mac.init to throw InvalidKeyException and verifies that
+         * the blind-index reports “HMAC Key Invalid” for diagnostic clarity.
+         */
+        @Test
+        @DisplayName("Blind Index: Should handle Invalid Key")
+        void blindIndex_InvalidKey() throws Exception{
+            encryptor.init();
+
+            // Mock Mac to throw InvalidKeyException on init()
+            Mac macMock = Mockito.mock(Mac.class);
+            Mockito.doThrow(new InvalidKeyException("Bad Key")).when(macMock).init(any());
+
+            try (MockedStatic<Mac> mockMac = Mockito.mockStatic(Mac.class)) {
+                mockMac.when(() -> Mac.getInstance(anyString())).thenReturn(macMock);
+
+                assertThatThrownBy(() -> AttributeEncryptor.blindIndex("Data"))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("HMAC Key Invalid");
+            } catch (Exception e) {
+                // Should not happen, just for checked exception signature
+            }
+        }
+    }
 }
