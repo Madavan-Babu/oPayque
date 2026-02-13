@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260212-001-add-optimistic-locking" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="virtual_cards"/>
+            <not>
+                <columnExists tableName="virtual_cards" columnName="version"/>
+            </not>
+        </preConditions>
+
+        <comment>Story 4.3: Concurrency Safety. Adding Version column for Hibernate Optimistic Locking.</comment>
+
+        <addColumn tableName="virtual_cards">
+            <column name="version" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

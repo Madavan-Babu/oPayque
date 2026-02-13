@@ -11,9 +11,15 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /// Epic 1: Identity & Access Management - Exception Mapping Verification
 ///
@@ -205,5 +211,43 @@ class GlobalExceptionHandlerTest {
         assertEquals("TOO_MANY_REQUESTS", body.code());
         assertEquals("Rate limit exceeded. Try again later.", body.message());
         assertEquals("/test/path", body.path()); // Verify metadata preservation
+    }
+
+  /**
+   * Validates graceful degradation when the framework cannot determine the expected Java type of a
+   * query parameter (e.g., ?limit=abc for int limit).
+   *
+   * <p>In a FinTech context, this protects against malformed payment payload injection attempts
+   * (e.g., negative interest rates, non-numeric limits) by mapping the unknown type to a safe,
+   * human-readable "unknown" label instead of leaking internal Java class names.
+   *
+   * <p>Security relevance: Prevents reconnaissance attacks that probe API parameter types to craft
+   * targeted injection vectors. Ensures the response body never exposes stack traces or class
+   * metadata, aligning with OWASP API Security Top-10 (API-3: Excessive Data Exposure).
+   *
+   * <p>Compliance note: Supports PCI DSS 4.0 §A2.2 "Error handling must not reveal system
+   * information" by sanitizing the type field before serialization into the {@link ErrorResponse}.
+   */
+  @Test
+  @DisplayName("Unit: Should fallback to 'unknown' type when RequiredType is null")
+  void shouldHandleTypeMismatch_WhenRequiredTypeIsNull() {
+        // 1. Arrange
+        MethodArgumentTypeMismatchException ex = mock(MethodArgumentTypeMismatchException.class);
+        when(ex.getRequiredType()).thenReturn(null);
+        when(ex.getName()).thenReturn("limit");
+        when(ex.getValue()).thenReturn("invalid-value");
+
+        WebRequest request = mock(WebRequest.class);
+        // FIX: Mock the description to prevent the NPE in buildErrorResponse
+        // getDescription(false) usually returns "uri=/api/v1/..."
+        given(request.getDescription(anyBoolean())).willReturn("uri=/api/v1/test");
+
+        // 2. Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleTypeMismatch(ex, request);
+
+        // 3. Assert
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().message())
+                .contains("type 'unknown'");
     }
 }

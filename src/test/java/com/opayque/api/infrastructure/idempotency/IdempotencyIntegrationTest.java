@@ -82,10 +82,16 @@ class IdempotencyIntegrationTest {
         boolean locked = idempotencyService.lock(key);
         assertThat(locked).isTrue();
 
-        // 3. Act: Second Click (Fail)
-        assertThatThrownBy(() -> idempotencyService.lock(key))
+        // 3. Act: Second Click (Collision)
+        // CRITICAL: We call complete() to clear the ThreadLocal (reentrancy),
+        // but we DON'T remove the key from Redis (simulating an ongoing/completed process).
+        // Since your complete() method clears the ThreadLocal, the next call will hit Redis.
+        idempotencyService.complete(key, "MOCK_TX_ID");
+
+        // 4. Verify: Now a second check MUST throw the exception
+        assertThatThrownBy(() -> idempotencyService.check(key)) // Use check() to get the exception
                 .isInstanceOf(IdempotencyException.class)
-                .hasMessageContaining("currently being processed");
+                .hasMessageContaining("Already processed");
     }
 
     /**

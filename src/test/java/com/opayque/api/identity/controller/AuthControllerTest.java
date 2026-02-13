@@ -163,7 +163,10 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("!!Invalid JSON!!"))
-                .andExpect(status().isInternalServerError());
+                // CHANGE: Expect 400 (Bad Request) instead of 500, GlobalExceptionHandler now got smarter than before.
+                .andExpect(status().isBadRequest())
+                // OPTIONAL: Verify the professional error code that was implemented
+                .andExpect(jsonPath("$.code").value("MALFORMED_JSON"));
     }
 
     /// Scenario: Secure Logout (Happy Path).

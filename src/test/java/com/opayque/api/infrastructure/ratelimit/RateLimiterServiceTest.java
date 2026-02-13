@@ -144,7 +144,7 @@ class RateLimiterServiceTest {
         // Act & Assert
         assertThatThrownBy(() -> rateLimiterService.checkLimit(userId))
                 .isInstanceOf(RateLimitExceededException.class)
-                .hasMessage("Rate limit exceeded. Try again later.");
+                .hasMessage("Rate limit exceeded for transfers. Try again later.");
 
         // Verify we didn't touch TTL on a blocked request
         verify(redisTemplate, never()).expire(anyString(), any(Duration.class));

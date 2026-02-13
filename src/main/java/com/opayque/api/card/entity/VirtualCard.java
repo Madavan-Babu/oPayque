@@ -103,6 +103,10 @@ public class VirtualCard {
     @UpdateTimestamp
     private LocalDateTime updatedAt;
 
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version = 0L;
+
 
     // =========================================================================
     // LIFECYCLE HOOKS (AUTOMATION)

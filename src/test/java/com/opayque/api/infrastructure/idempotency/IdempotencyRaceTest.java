@@ -103,7 +103,10 @@ class IdempotencyRaceTest {
                     startingGun.await();
 
                     // FIRE!
-                    idempotencyService.lock(sharedKey);
+                    // FIX: Call check() instead of lock()
+                    // check() throws IdempotencyException on collision.
+                    // lock() returns false, which doesn't trigger the catch block below.
+                    idempotencyService.check(sharedKey);
 
                     // If we get here, we WON the lock
                     successCount.incrementAndGet();

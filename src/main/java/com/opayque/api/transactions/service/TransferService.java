@@ -87,7 +87,7 @@ public class TransferService {
             }
 
             // Acquire pessimistic lock on sender wallet to serialize concurrent debits
-            Account senderAccount = accountService.getAccountById(senderId); // Locks Sender
+            Account senderAccount = accountService.getAccountForUpdate(senderId); // Forces the lock
 
             // Locate beneficiary wallet; reject if currency corridor unavailable
             List<Account> receiverAccounts = accountService.getAccountsForUser(receiverEmail);

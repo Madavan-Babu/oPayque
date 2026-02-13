@@ -1,5 +1,7 @@
 package com.opayque.api.card.entity;
 
+import java.util.Set;
+
 /**
  * Defines the operational state of a payment instrument within the oPayque ecosystem.
  * <p>
@@ -45,5 +47,23 @@ public enum CardStatus {
      * the secure-element provider. This action is irrevocable within the platform.
      * </p>
      */
-    TERMINATED
+    TERMINATED;
+
+    /**
+     * State Machine Logic: Validation of lifecycle transitions.
+     *
+     * @param nextState The proposed new state.
+     * @return true if the transition is architecturally valid; false otherwise.
+     */
+    public boolean canTransitionTo(CardStatus nextState) {
+        // 1. Identity Transition (A -> A) is always harmless/valid.
+        if (this == nextState) return true;
+
+        // 2. Define Valid Transitions based on CURRENT state.
+        return switch (this) {
+            case ACTIVE -> Set.of(FROZEN, TERMINATED).contains(nextState);
+            case FROZEN -> Set.of(ACTIVE, TERMINATED).contains(nextState);
+            case TERMINATED -> false; // The Iron Rule: Dead cards stay dead.
+        };
+    }
 }

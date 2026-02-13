@@ -167,7 +167,8 @@ class TransferPropertyTest {
         User me = User.builder().id(userId).email(email).build();
         Account myAccount = Account.builder().id(userId).user(me).currencyCode(currency).build();
 
-        given(accountService.getAccountById(userId)).willReturn(myAccount);
+        //FIX: Updated method call
+        given(accountService.getAccountForUpdate(userId)).willReturn(myAccount);
         // Receiver resolution returns the same account
         given(accountService.getAccountsForUser(email)).willReturn(List.of(myAccount));
 
@@ -232,7 +233,8 @@ class TransferPropertyTest {
         // Sender Setup
         User senderUser = User.builder().id(senderId).email("sender@opayque.com").build();
         Account senderAccount = Account.builder().id(senderId).user(senderUser).currencyCode("USD").build();
-        given(accountService.getAccountById(senderId)).willReturn(senderAccount);
+        //FIX: Updated Method call from getAccountById -> getAccountForUpdate
+        given(accountService.getAccountForUpdate(senderId)).willReturn(senderAccount);
         given(ledgerService.calculateBalance(senderId)).willReturn(amount.add(BigDecimal.TEN)); // Always has enough funds
 
         // Receiver Setup
