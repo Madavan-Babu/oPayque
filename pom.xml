@@ -10,7 +10,7 @@
 	</parent>
 	<groupId>com.opayque</groupId>
 	<artifactId>api</artifactId>
-	<version>3.4.0-SNAPSHOT</version>
+	<version>3.5.0-SNAPSHOT</version>
 	<name>oPayque-API</name>
 	<description>oPayque Core Banking &amp; Digital Wallet API </description>
 	<url/>
