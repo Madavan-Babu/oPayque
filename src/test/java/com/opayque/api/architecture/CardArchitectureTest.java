@@ -1,19 +1,3 @@
-/**
- * Architectural Fortress for the Card Domain.
- * <p>
- * This test class enforces the “Fortress” pattern within the oPayque modular monolith,
- * ensuring that every layer inside {@code com.opayque.api.card} remains strictly
- * compartmentalized. Violations are rejected at build-time, guaranteeing PCI-DSS
- * segmentation, PSD2 secure coding guidelines, and internal AML/KYC auditability.
- * </p>
- * <p>
- * All rules are evaluated by ArchUnit during the {@code test} phase, providing
- * an immutable security gate that no pull request can bypass.
- * </p>
- *
- * @author Madavan Babu
- * @since 2026
- */
 package com.opayque.api.architecture;
 
 import com.tngtech.archunit.core.importer.ImportOption;
@@ -22,12 +6,11 @@ import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 import jakarta.persistence.Entity;
 import org.springframework.data.repository.Repository;
-import org.springframework.stereotype.Controller;
 import org.springframework.stereotype.Service;
-import org.springframework.web.bind.annotation.RestController;
 
-import static com.tngtech.archunit.core.domain.JavaClass.Predicates.assignableTo;
 import static com.tngtech.archunit.core.domain.JavaCall.Predicates.target;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.assignableTo;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
 import static com.tngtech.archunit.core.domain.properties.HasName.Predicates.nameMatching;
 import static com.tngtech.archunit.core.domain.properties.HasOwner.Predicates.With.owner;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.*;
@@ -51,6 +34,7 @@ import static com.tngtech.archunit.library.Architectures.layeredArchitecture;
  * @since 2026
  */
 @AnalyzeClasses(packages = "com.opayque.api.card", importOptions = ImportOption.DoNotIncludeTests.class)
+@SuppressWarnings("unused")
 public class CardArchitectureTest {
 
     // =========================================================================
@@ -97,30 +81,28 @@ public class CardArchitectureTest {
     // =========================================================================
 
     /**
-     * Prohibits controllers from directly wiring or invoking repository interfaces,
-     * enforcing the Service layer as the sole gatekeeper for data access. This
-     * prevents SQL-injection vectors and guarantees that every database call is
-     * wrapped in declarative transaction control and AML/KYC checks.
+     * Guardrail 1: Explicit Controller Isolation.
+     * Controllers must NEVER bypass the Service layer to talk to Repositories.
+     * This ensures all business rules (Validation, Rate Limiting, Idempotency) are respected.
      */
     @ArchTest
-    static final ArchRule controllers_must_not_access_repositories =
-            noClasses().that().areAnnotatedWith(RestController.class)
-                    .or().areAnnotatedWith(Controller.class)
-                    .should().dependOnClassesThat().haveNameMatching(".*Repository")
-                    .as("Controllers must NEVER bypass the Service layer to touch the Database directly");
+    static final ArchRule controllers_must_not_access_repositories = noClasses()
+            .that().resideInAPackage("..controller..")
+            .should().dependOnClassesThat().resideInAPackage("..repository..")
+            .as("Controllers must strictly talk to Services, never Repositories.");
 
     /**
-     * Blocks REST endpoints from returning JPA entities, forcing the use of
-     * sanitized DTOs. This eliminates the risk of exposing PAN, CVV, or HSM-derived
-     * keys to downstream consumers, aligning with PCI-DSS requirement 3.4
-     * (Strong Cryptography) and GDPR data-minimization principles.
+     * Guardrail 2: Data Leakage Protection.
+     * Controllers must return DTOs (Request/Response objects), never raw Entities.
+     * Returning Entities exposes DB schema, passwords, and risks LazyInitializationException.
      */
     @ArchTest
-    static final ArchRule controllers_must_not_return_entities =
-            noMethods().that().areDeclaredInClassesThat().areAnnotatedWith(RestController.class)
-                    .should().haveRawReturnType("com.opayque.api.card.entity.VirtualCard")
-                    .orShould().haveRawReturnType("java.util.List<com.opayque.api.card.entity.VirtualCard>")
-                    .as("Controllers must return DTOs, never raw Entities (prevents data leakage)");
+    static final ArchRule controllers_must_not_return_entities = methods()
+            .that().arePublic()
+            .and().areDeclaredInClassesThat().resideInAPackage("..controller..")
+            .should().notHaveRawReturnType(resideInAPackage("..entity.."))
+            .as("Controllers must strictly return DTOs, never Database Entities.");
+
 
     // =========================================================================
     // 3. SERVICE LAYER SECURITY & INTEGRITY
@@ -195,4 +177,35 @@ public class CardArchitectureTest {
             .whereLayer("Service").mayOnlyBeAccessedByLayers("Controller", "Service")
             .whereLayer("Repository").mayOnlyBeAccessedByLayers("Service")
             .as("Strict Layered Architecture: Controller -> Service -> Repository");
+
+    // =========================================================================
+    // 6. ROBUST GUARDRAILS (SAFETY & CONSISTENCY)
+    // =========================================================================
+
+    /**
+     * Guardrail 1: Type Safety (The 'PaymentStatus' Rule).
+     * Enforces that any DTO field named 'status' MUST be an Enum (CardStatus/PaymentStatus).
+     * This prevents 'Magic Strings' (e.g., "APROVED" typo) from breaking the API contract.
+     */
+    @ArchTest
+    static final ArchRule status_fields_must_be_strongly_typed = fields()
+            .that().areDeclaredInClassesThat().resideInAPackage("..card.dto..")
+            .and().haveName("status")
+            .should().haveRawType(resideInAPackage("..card.entity..")) // Enums live here
+            .as("DTO 'status' fields must use Type-Safe Enums (e.g., PaymentStatus), never Strings.");
+
+    /**
+     * Guardrail 2: Service Transactionality (ACID Enforcer).
+     * Every public business method in the Service layer must be @Transactional.
+     * This guarantees that if a Debit works but Credit fails, the whole thing rolls back.
+     */
+    @ArchTest
+    static final ArchRule services_must_be_transactional = methods()
+            .that().arePublic()
+            .and().areDeclaredInClassesThat().resideInAPackage("..card.service..")
+            .and().doNotHaveName("toString") // Exclude standard Object methods
+            .and().doNotHaveName("hashCode")
+            .and().doNotHaveName("equals")
+            .should().beAnnotatedWith(org.springframework.transaction.annotation.Transactional.class)
+            .as("All public Service methods must be @Transactional to guarantee ACID integrity.");
 }

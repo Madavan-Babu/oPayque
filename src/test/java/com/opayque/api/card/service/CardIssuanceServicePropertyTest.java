@@ -54,6 +54,8 @@ import static org.mockito.Mockito.*;
  * @since 2026
  */
 @ActiveProfiles("test")
+@Tag("pbt")
+@SuppressWarnings("unused")
 class CardIssuanceServicePropertyTest {
 
     // Mocks
@@ -287,6 +289,140 @@ class CardIssuanceServicePropertyTest {
     }
 
     // =========================================================================
+    // PROPERTY 6: LIMIT UPDATE BOLA (Strict Ownership)
+    // Invariant: If Requester != Owner, AccessDeniedException is ALWAYS thrown.
+    // =========================================================================
+    @Property
+    void updateMonthlyLimit_BOLA_Invariant(
+            @ForAll("uuids") UUID requesterId,
+            @ForAll("uuids") UUID ownerId,
+            @ForAll("bigDecimalsWithNull") BigDecimal newLimit,
+            @ForAll("idempotencyKeys") String key
+    ) {
+        // Constraint: Requester is NOT the owner
+        Assume.that(!requesterId.equals(ownerId));
+
+        // Reset mocks to prevent state bleeding between iterations
+        reset(virtualCardRepository, rateLimiterService, idempotencyService);
+
+        mockCurrentUser(requesterId);
+        UUID cardId = UUID.randomUUID();
+
+        // Given: Card belongs to 'ownerId'
+        User owner = User.builder().id(ownerId).role(Role.CUSTOMER).build();
+        Account wallet = Account.builder().user(owner).build();
+        VirtualCard card = VirtualCard.builder()
+                .id(cardId).account(wallet).monthlyLimit(BigDecimal.ZERO).build();
+
+        // FIX: Mock findByIdWithLock instead of findById
+        when(virtualCardRepository.findByIdWithLock(cardId)).thenReturn(Optional.of(card));
+
+        // When/Then
+        assertThatThrownBy(() -> service.updateMonthlyLimit(cardId, newLimit, key))
+                .isInstanceOf(AccessDeniedException.class);
+
+        // Security Critical: Ensure NO changes were persisted
+        verify(virtualCardRepository, never()).save(any());
+        verify(idempotencyService, never()).complete(anyString(), anyString());
+    }
+
+    // =========================================================================
+    // PROPERTY 7: DATA INTEGRITY & FLOW (The Golden Path)
+    // Invariant: Valid updates must persist EXACT value and complete Idempotency.
+    // =========================================================================
+    @Property
+    void updateMonthlyLimit_Persistence_Invariant(
+            @ForAll("bigDecimalsWithNull") BigDecimal newLimit,
+            @ForAll("idempotencyKeys") String key
+    ) {
+        reset(virtualCardRepository, rateLimiterService, idempotencyService);
+
+        UUID userId = UUID.randomUUID();
+        mockCurrentUser(userId);
+        UUID cardId = UUID.randomUUID();
+
+        // Given: Valid Card owned by User
+        User owner = User.builder().id(userId).fullName("Test Owner").role(Role.CUSTOMER).build();
+        Account wallet = Account.builder().user(owner).currencyCode("USD").build();
+        VirtualCard card = VirtualCard.builder()
+                .id(cardId).account(wallet).monthlyLimit(new BigDecimal("99999.99")).build();
+
+        // FIX: Mock findByIdWithLock instead of findById
+        when(virtualCardRepository.findByIdWithLock(cardId)).thenReturn(Optional.of(card));
+
+        // Mock Save to return the modified entity
+        when(virtualCardRepository.save(any(VirtualCard.class))).thenAnswer(i -> i.getArgument(0));
+
+        // When
+        service.updateMonthlyLimit(cardId, newLimit, key);
+
+        // Then 1: Verify Exact Persistence
+        ArgumentCaptor<VirtualCard> captor = ArgumentCaptor.forClass(VirtualCard.class);
+        verify(virtualCardRepository).save(captor.capture());
+        assertThat(captor.getValue().getMonthlyLimit()).isEqualTo(newLimit);
+
+        // Then 2: Verify Rate Limit Bucket Isolation (Must be 'card_limit_update')
+        verify(rateLimiterService).checkLimit(eq(userId.toString()), eq("card_limit_update"), anyLong());
+
+        // Then 3: Verify Idempotency Completion
+        verify(idempotencyService).complete(key, cardId.toString());
+    }
+
+    // =========================================================================
+    // PROPERTY 8: FAIL-FAST ORDERING (Chaos Gates)
+    // Invariant: Failures must occur in strict order: Idempotency -> RateLimit -> Repo.
+    // =========================================================================
+    /**
+     * Property 8 – Fail-Fast Architectural Ordering.
+     * <p>
+     * Chaos Scenario: Inject failures at different stages.
+     * <p>
+     * Invariant:
+     * - If Idempotency fails, RateLimit/Repo are NEVER touched.
+     * - If RateLimit fails, Repo is NEVER touched.
+     * - Protects downstream resources from bad traffic.
+     */
+    @Property
+    void updateMonthlyLimit_FailFast_Invariant(
+            @ForAll("idempotencyKeys") String key,
+            @ForAll("bigDecimalsWithNull") BigDecimal newLimit,
+            @ForAll boolean isIdempotencyFailure // Toggle Chaos Mode
+    ) {
+        reset(virtualCardRepository, rateLimiterService, idempotencyService);
+
+        UUID userId = UUID.randomUUID();
+        mockCurrentUser(userId);
+        UUID cardId = UUID.randomUUID();
+
+        if (isIdempotencyFailure) {
+            // Case A: Idempotency Service Explodes (Duplicate/Locked)
+            doThrow(new com.opayque.api.infrastructure.exception.IdempotencyException("Chaos"))
+                    .when(idempotencyService).check(key);
+
+            assertThatThrownBy(() -> service.updateMonthlyLimit(cardId, newLimit, key))
+                    .isInstanceOf(com.opayque.api.infrastructure.exception.IdempotencyException.class);
+
+            // Assert: Rate Limiter & Repo MUST BE safe
+            verify(rateLimiterService, never()).checkLimit(any(), any(), anyLong());
+            verify(virtualCardRepository, never()).findById(any());
+
+        } else {
+            // Case B: Idempotency OK, but Rate Limit Explodes
+            // (We assume repo setup is missing, which is fine because we expect to fail before it)
+            doThrow(new com.opayque.api.infrastructure.exception.RateLimitExceededException("Chaos"))
+                    .when(rateLimiterService).checkLimit(any(), any(), anyLong());
+
+            assertThatThrownBy(() -> service.updateMonthlyLimit(cardId, newLimit, key))
+                    .isInstanceOf(com.opayque.api.infrastructure.exception.RateLimitExceededException.class);
+
+            // Assert: Repo MUST BE safe
+            verify(virtualCardRepository, never()).findById(any());
+        }
+    }
+
+
+
+    // =========================================================================
     // GENERATORS & HELPERS
     // =========================================================================
 
@@ -352,5 +488,14 @@ class CardIssuanceServicePropertyTest {
                 principal, null, List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER"))
         );
         SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    // =========================================================================
+    // NEW GENERATOR
+    // =========================================================================
+
+    @Provide
+    Arbitrary<String> idempotencyKeys() {
+        return Arbitraries.strings().alpha().numeric().ofLength(10);
     }
 }

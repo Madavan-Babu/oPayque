@@ -560,6 +560,112 @@ class CardIssuanceServiceTest {
     }
 
     // =========================================================================
+    // 4. LIMIT MANAGEMENT (Update Monthly Limit)
+    // =========================================================================
+
+    /**
+     * Validates the "Golden Path" for updating a card limit.
+     * FIX: Reuses 'mockUser' from setUp() to ensure SecurityContext consistency.
+     */
+    @Test
+    @DisplayName("UpdateLimit: Happy Path - Should update limit, persist, and complete idempotency")
+    void updateMonthlyLimit_Success_HappyPath() {
+        // Arrange
+        UUID cardId = UUID.randomUUID();
+
+        // Reuse mockUser from setUp() to ensure SecurityContext consistency
+        Account account = new Account();
+        account.setUser(mockUser);
+
+        VirtualCard card = new VirtualCard();
+        card.setId(cardId);
+        card.setAccount(account);
+        card.setMonthlyLimit(new BigDecimal("100.00"));
+
+        // FIX: Mock findByIdWithLock instead of findById
+        when(virtualCardRepository.findByIdWithLock(cardId)).thenReturn(Optional.of(card));
+        when(virtualCardRepository.save(any(VirtualCard.class))).thenAnswer(i -> i.getArgument(0));
+
+        BigDecimal newLimit = new BigDecimal("5000.00");
+        CardSummaryResponse response = cardIssuanceService.updateMonthlyLimit(cardId, newLimit, "txn-123");
+
+        // Assert
+        assertThat(response.monthlyLimit()).isEqualByComparingTo(newLimit);
+        verify(virtualCardRepository).save(card);
+        verify(idempotencyService).complete(eq("txn-123"), anyString());
+    }
+
+    @Test
+    @DisplayName("UpdateLimit: BOLA Guard - Should Block attempt to modify another user's card")
+    void updateMonthlyLimit_BOLA_AccessDenied() {
+        UUID cardId = UUID.randomUUID();
+        // Context is 'mockUser' (Attacker) from setUp()
+
+        User victim = new User();
+        victim.setId(UUID.randomUUID());
+
+        Account victimAccount = new Account();
+        victimAccount.setUser(victim);
+
+        VirtualCard victimCard = new VirtualCard();
+        victimCard.setId(cardId);
+        victimCard.setAccount(victimAccount);
+
+        // FIX: Mock findByIdWithLock
+        when(virtualCardRepository.findByIdWithLock(cardId)).thenReturn(Optional.of(victimCard));
+
+        // Act & Assert
+        assertThatThrownBy(() -> cardIssuanceService.updateMonthlyLimit(cardId, BigDecimal.TEN, "idempotency-key"))
+                .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+
+        verify(virtualCardRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("UpdateLimit: Should Fail if Card ID does not exist")
+    void updateMonthlyLimit_CardNotFound_Throws() {
+        UUID cardId = UUID.randomUUID();
+
+        // FIX: Mock findByIdWithLock to return empty
+        when(virtualCardRepository.findByIdWithLock(cardId)).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThatThrownBy(() -> cardIssuanceService.updateMonthlyLimit(cardId, BigDecimal.TEN, "key"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Card not found");
+
+        verify(virtualCardRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("UpdateLimit: Should Rethrow Exception and Skip Idempotency on DB Failure")
+    void updateMonthlyLimit_DBFailure_Rethrows() {
+        UUID cardId = UUID.randomUUID();
+
+        Account account = new Account();
+        account.setUser(mockUser);
+
+        VirtualCard card = new VirtualCard();
+        card.setId(cardId);
+        card.setAccount(account);
+
+        // FIX: Mock findByIdWithLock
+        when(virtualCardRepository.findByIdWithLock(cardId)).thenReturn(Optional.of(card));
+
+        // Mock save to fail
+        when(virtualCardRepository.save(any(VirtualCard.class)))
+                .thenThrow(new RuntimeException("DB Connection Lost"));
+
+        // Act & Assert
+        assertThatThrownBy(() -> cardIssuanceService.updateMonthlyLimit(cardId, BigDecimal.TEN, "key"))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("DB Connection Lost");
+
+        verify(idempotencyService, never()).complete(anyString(), anyString());
+    }
+
+
+    // =========================================================================
     // HELPER: MOCK SECURITY CONTEXT
     // =========================================================================
     /**

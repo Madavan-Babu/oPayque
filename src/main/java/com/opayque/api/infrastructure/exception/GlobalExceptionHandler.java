@@ -260,6 +260,23 @@ public class GlobalExceptionHandler {
     }
 
 
+    /// Handles violations of the Card Monthly Spend Limit (The "Redis Accumulator").
+    ///
+    /// @param ex The exception thrown when the projected spend exceeds the card's monthlyLimit.
+    /// @param request The web request context.
+    /// @return A 403 Forbidden response (Distinct from 402 Insufficient Funds).
+    @ExceptionHandler(CardLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleCardLimitExceeded(CardLimitExceededException ex, WebRequest request) {
+        log.warn("Card Limit Violation: {}", ex.getMessage());
+        return buildErrorResponse(
+                HttpStatus.FORBIDDEN,
+                "CARD_LIMIT_EXCEEDED",
+                ex.getMessage(),
+                request
+        );
+    }
+
+
     /// Fallback handler for unexpected internal server errors.
     ///
     /// Provides full visibility in **AWS CloudWatch** through detailed error logging while

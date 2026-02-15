@@ -1,9 +1,6 @@
 package com.opayque.api.card.controller;
 
-import com.opayque.api.card.dto.CardIssueRequest;
-import com.opayque.api.card.dto.CardIssueResponse;
-import com.opayque.api.card.dto.CardStatusUpdateRequest;
-import com.opayque.api.card.dto.CardSummaryResponse;
+import com.opayque.api.card.dto.*;
 import com.opayque.api.card.service.CardIssuanceService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -14,8 +11,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
-
-
 
 /**
  * REST controller for secure card lifecycle management within the oPayque ecosystem.
@@ -121,5 +116,29 @@ public class CardController {
             @Valid @RequestBody CardStatusUpdateRequest request
     ) {
         return ResponseEntity.ok(cardIssuanceService.changeCardStatus(cardId, request.status()));
+    }
+
+    /**
+     * Updates the monthly spending limit of a specific card.
+     * <p>
+     * <b>Rate Limiting:</b> Restricted to 5 updates per minute to prevent griefing.
+     * <b>Idempotency:</b> Protected against replay attacks via 'Idempotency-Key'.
+     *
+     * @param cardId UUID of the card.
+     * @param request JSON containing the new BigDecimal limit.
+     * @return 200 OK with the updated summary.
+     */
+    @PatchMapping("/{cardId}/limit")
+    public ResponseEntity<CardSummaryResponse> updateCardLimit(
+            @PathVariable UUID cardId,
+            @RequestHeader(value = "Idempotency-Key", required = true) String idempotencyKey,
+            @Valid @RequestBody CardLimitUpdateRequest request
+    ) {
+        log.info("API: Update Limit Request | Card: [{}] | New Limit: [{}] | Idempotency: [{}]",
+                cardId, request.newLimit(), idempotencyKey);
+
+        return ResponseEntity.ok(
+                cardIssuanceService.updateMonthlyLimit(cardId, request.newLimit(), idempotencyKey)
+        );
     }
 }

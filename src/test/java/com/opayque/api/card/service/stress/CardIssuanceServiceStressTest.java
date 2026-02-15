@@ -1,9 +1,11 @@
-package com.opayque.api.card.service;
+package com.opayque.api.card.service.stress;
 
 import com.opayque.api.card.dto.CardIssueRequest;
 import com.opayque.api.card.entity.CardStatus;
 import com.opayque.api.card.entity.VirtualCard;
 import com.opayque.api.card.repository.VirtualCardRepository;
+import com.opayque.api.card.service.CardGeneratorService;
+import com.opayque.api.card.service.CardIssuanceService;
 import com.opayque.api.identity.entity.Role;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;

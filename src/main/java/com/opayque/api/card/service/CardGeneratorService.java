@@ -7,6 +7,7 @@ import com.opayque.api.infrastructure.config.OpayqueCardProperties;
 import com.opayque.api.infrastructure.encryption.AttributeEncryptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
 import java.time.LocalDate;
@@ -72,6 +73,7 @@ public class CardGeneratorService {
      *
      * @return sealed card secrets ready for tokenization; never persisted in plaintext.
      */
+    @Transactional(readOnly = true)
     public CardSecrets generateCard() {
         String pan = generateUniquePan();
         String cvv = generateCvv();

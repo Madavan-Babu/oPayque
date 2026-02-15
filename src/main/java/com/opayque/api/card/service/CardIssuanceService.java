@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
@@ -194,6 +195,61 @@ public class CardIssuanceService {
     }
 
     /**
+     * Modifies the monthly spending limit for a virtual card with strict security controls.
+     *
+     * @param cardId The UUID of the card.
+     * @param newLimit The new monthly ceiling.
+     * @param idempotencyKey The unique replay-protection token.
+     * @return The updated card summary.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public CardSummaryResponse updateMonthlyLimit(UUID cardId, BigDecimal newLimit, String idempotencyKey) {
+        UUID userId = SecurityUtil.getCurrentUserId();
+
+        try {
+            // 1. Idempotency Guard (Fail Fast)
+            idempotencyService.check(idempotencyKey);
+
+            // 2. Rate Limiting (5 updates per minute per user)
+            // Separate bucket from issuance to prevent DOSing your own card creation
+            rateLimiterService.checkLimit(userId.toString(), "card_limit_update", 5);
+
+            // 3. Fetch Domain Entity
+            // This forces allowed threads to queue, eliminating StaleObjectStateExceptions.
+            VirtualCard card = virtualCardRepository.findByIdWithLock(cardId)
+                    .orElseThrow(() -> new IllegalArgumentException("Card not found"));
+
+            // 4. BOLA Check (Strict Ownership)
+            if (!card.getAccount().getUser().getId().equals(userId)) {
+                log.warn("BOLA Violation: User [{}] tried to change Limit on Card [{}] owned by [{}]",
+                        userId, cardId, card.getAccount().getUser().getId());
+                throw new org.springframework.security.access.AccessDeniedException("Access Denied");
+            }
+
+            // 5. Update State
+            BigDecimal oldLimit = card.getMonthlyLimit();
+            card.setMonthlyLimit(newLimit);
+
+            // 6. Persist
+            VirtualCard updatedCard = virtualCardRepository.save(card);
+
+            log.info("Card Limit Updated | ID: {} | User: {} | Old: {} | New: {}",
+                    cardId, userId, oldLimit, newLimit);
+
+            // 7. Complete Idempotency
+            idempotencyService.complete(idempotencyKey, updatedCard.getId().toString());
+
+            return toSummaryDto(updatedCard);
+
+        } catch (IdempotencyException e) {
+            throw e; // Allow 409 Conflict to bubble up
+        } catch (Exception e) {
+            log.error("Failed to update card limit | Card: {} | User: {}", cardId, userId, e);
+            throw e; // Ensure the transaction rolls back
+        }
+    }
+
+    /**
      * Returns a read-only ledger view of all virtual cards owned by the caller.
      * <p>
      * PANs are masked according to PCI-DSS display guidelines (only last 4 digits
@@ -229,7 +285,8 @@ public class CardIssuanceService {
                 card.getExpiryDate(),
                 card.getCardholderName(),
                 card.getAccount().getCurrencyCode(),
-                card.getStatus()
+                card.getStatus(),
+                card.getMonthlyLimit()
         );
     }
 

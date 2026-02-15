@@ -1,8 +1,9 @@
-package com.opayque.api.card.service;
+package com.opayque.api.card.service.stress;
 
 import com.opayque.api.card.entity.VirtualCard;
 import com.opayque.api.card.model.CardSecrets;
 import com.opayque.api.card.repository.VirtualCardRepository;
+import com.opayque.api.card.service.CardGeneratorService;
 import com.opayque.api.card.util.LuhnAlgorithm;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

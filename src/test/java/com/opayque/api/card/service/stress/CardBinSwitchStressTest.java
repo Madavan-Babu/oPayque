@@ -1,6 +1,7 @@
-package com.opayque.api.card.service;
+package com.opayque.api.card.service.stress;
 
 import com.opayque.api.card.model.CardSecrets;
+import com.opayque.api.card.service.CardGeneratorService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;

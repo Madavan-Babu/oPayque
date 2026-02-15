@@ -1,11 +1,15 @@
 package com.opayque.api.card.repository;
 
 import com.opayque.api.card.entity.VirtualCard;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -108,4 +112,42 @@ public interface VirtualCardRepository extends JpaRepository<VirtualCard, UUID> 
    */
   @Query("SELECT vc FROM VirtualCard vc JOIN vc.account a WHERE a.user.id = :userId")
   List<VirtualCard> findAllByAccount_User_Id(UUID userId);
+
+  /**
+   * Retrieves a virtual card by its unique blind index fingerprint.
+   *
+   * <p><b>Story 4.4: External Transaction Simulation</b>
+   * <p>This method enables O(1) lookup of a card entity using the hashed PAN (HMAC-SHA256)
+   * during an external transaction simulation (e.g., "Merchant Swipe"). This avoids the need
+   * to decrypt the entire table to find a matching PAN, maintaining high performance and security.
+   *
+   * @param panFingerprint The deterministic HMAC-SHA256 hash of the PAN.
+   * @return An {@link Optional} containing the {@link VirtualCard} if found, or empty otherwise.
+   */
+  Optional<VirtualCard> findByPanFingerprint(String panFingerprint);
+
+  /**
+   * Retrieves a {@link VirtualCard} entity by its primary identifier while acquiring a {@link
+   * jakarta.persistence.LockModeType#PESSIMISTIC_WRITE} lock.
+   *
+   * <p>In high‑concurrency transaction flows (e.g., card‑freeze, limit‑adjustment, or real‑time
+   * authorization), this method guarantees exclusive write access to the target row, preventing
+   * lost‑update anomalies and ensuring ACID compliance. The pessimistic lock is held until the
+   * surrounding transaction completes, aligning with the platform's strict PCI‑DSS 4.0 requirement
+   * for deterministic state transitions.
+   *
+   * <p>Typical usage patterns include:
+   *
+   * <ul>
+   *   <li>Fetching a card for mutable operations within a {@code @Transactional} service method.
+   *   <li>Enforcing row‑level serialization for concurrent balance‑deduction scenarios.
+   * </ul>
+   *
+   * @param id the immutable {@link UUID} primary key of the virtual card; must be a v4 UUID.
+   * @return an {@link Optional} containing the {@link VirtualCard} if it exists; otherwise {@link
+   *     Optional#empty()}.
+   */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("SELECT v FROM VirtualCard v WHERE v.id = :id")
+  Optional<VirtualCard> findByIdWithLock(@Param("id") UUID id);
 }

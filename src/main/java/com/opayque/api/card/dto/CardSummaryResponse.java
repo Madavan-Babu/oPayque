@@ -1,6 +1,8 @@
 package com.opayque.api.card.dto;
 
 import com.opayque.api.card.entity.CardStatus;
+
+import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
@@ -35,5 +37,21 @@ public record CardSummaryResponse(
     String expiryDate,
     String cardholderName,
     String currency,
-    CardStatus status
-) {}
+    CardStatus status,
+    BigDecimal monthlyLimit
+) {
+    /**
+     * Legacy Constructor (Story 4.1/4.2 Compatibility).
+     * Routes existing 6-argument calls to the canonical constructor with a null limit.
+     */
+    public CardSummaryResponse(
+            UUID cardId,
+            String maskedPan,
+            String expiryDate,
+            String cardholderName,
+            String currency,
+            CardStatus status
+    ) {
+        this(cardId, maskedPan, expiryDate, cardholderName, currency, status, null);
+    }
+}
