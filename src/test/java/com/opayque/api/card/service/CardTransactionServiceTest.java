@@ -1,5 +1,6 @@
 package com.opayque.api.card.service;
 
+import com.opayque.api.card.controller.CardController;
 import com.opayque.api.card.dto.CardTransactionRequest;
 import com.opayque.api.card.dto.CardTransactionResponse;
 import com.opayque.api.card.entity.CardStatus;
@@ -40,6 +41,43 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
+/**
+ * <p>
+ * Integration test suite for {@link CardTransactionService}. This class validates the complete
+ * processing pipeline of a card transaction, ensuring that each gate (idempotency, lookup,
+ * rate‑limiting, authentication, authorization, financial limits, and execution) behaves as
+ * expected under both happy‑path and failure scenarios.
+ * </p>
+ *
+ * <p>
+ * The tests orchestrate a realistic interaction between several domain services:
+ * <ul>
+ *   <li>{@link VirtualCardRepository} – provides lookup of virtual cards via blind index.</li>
+ *   <li>{@link CardLimitService} – enforces monthly spending limits stored in Redis.</li>
+ *   <li>{@link LedgerService} – debits the underlying account and records the transaction.</li>
+ *   <li>{@link AttributeEncryptor} – handles encryption/decryption of sensitive card attributes.</li>
+ *   <li>{@link RateLimiterService} – protects against excessive request rates.</li>
+ *   <li>{@link IdempotencyService} – guarantees exactly‑once processing for repeat requests.</li>
+ * </ul>
+ * By mocking these collaborators, the suite isolates {@link CardTransactionService} and verifies
+ * that it reacts correctly to each possible outcome, including proper compensation (e.g., rolling
+ * back Redis spend when the ledger fails) and correct propagation of domain‑specific exceptions.
+ * </p>
+ *
+ * <p>
+ * The test data includes realistic card details such as {@code VALID_PAN}, {@code HASHED_PAN},
+ * {@code ENCRYPTED_CVV}, {@code ENCRYPTED_EXPIRY}, and their corresponding valid values.
+ * These constants enable verification of encryption handling and formatting logic for transaction
+ * descriptions and reference identifiers.
+ * </p>
+ *
+ * @author Madavan Babu
+ * @since 2026
+ *
+ * @see CardController
+ * @see VirtualCardRepository
+ * @see CardTransactionService
+ */
 @ExtendWith(MockitoExtension.class)
 class CardTransactionServiceTest {
 
@@ -65,6 +103,28 @@ class CardTransactionServiceTest {
     private static final String VALID_CVV = "123";
     private static final String VALID_EXPIRY = "12/29";
 
+    /**
+     * Sets up the common test fixtures for {@link CardTransactionServiceTest}.
+     *
+     * <p>Creates a {@link MockedStatic} mock for {@link AttributeEncryptor} and configures
+     * {@code AttributeEncryptor.blindIndex(VALID_PAN)} to return {@code HASHED_PAN}. This deterministic
+     * behaviour isolates the encryption logic from the transaction processing tests.
+     *
+     * <p>Instantiates a {@link CardTransactionRequest} populated with valid PAN, CVV, expiry, amount,
+     * currency, merchant description, merchant code, and transaction identifier. The request object
+     * is reused by all test scenarios to focus on the service logic rather than request construction.
+     *
+     * <p>Builds in‑memory {@link Account} and {@link VirtualCard} entities:
+     * <ul>
+     *   <li>The {@link VirtualCard} references the {@link Account} to model card ownership.</li>
+     *   <li>It is set to {@link CardStatus#ACTIVE}, given a monthly limit of {@code 1000.00},
+     *       and supplied with encrypted CVV and expiry values.</li>
+     * </ul>
+     *
+     * @see CardTransactionService
+     * @see CardController
+     * @see VirtualCardRepository
+     */
     @BeforeEach
     void setUp() {
         // Mock Static Method for Blind Index
@@ -98,6 +158,34 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 1: The Golden Path
     // =========================================================================
+
+    /**
+     * Validates the full successful path of {@link CardTransactionService#processTransaction(CardTransactionRequest)}.
+     *
+     * <p>This test verifies that when all pre-authorisation checks pass (idempotency, rate limit,
+     * card limits, CVV/Expiry validation, card status) the transaction is approved and the ledger
+     * is correctly debited.
+     *
+     * <p>Expectations:
+     * <ul>
+     *   <li>Transaction status is {@code APPROED} and a transaction ID is returned.</li>
+     *   <li>Services are invoked in the correct order: {@link IdempotencyService},
+     *       {@link RateLimiterService}, {@link CardLimitService}, {@link LedgerService}.</li>
+     *   <li>The ledger request captures the exact amount of the transaction.</li>
+     *   <li>Idempotency is marked as completed to prevent duplicate processing.</li>
+     * </ul>
+     *
+     * <p>Side effects:
+     * <ul>
+     *   <li>The ledger records a new entry tracking the debit.</li>
+     *   <br>
+     *   <li>Idempotency marker is set for the transaction ID.</li>
+     *   <br>
+     *   <li>Card limit service no longer updates the accumulator table (behaviour removed from service).</li>
+     * </ul>
+     *
+     * @see CardTransactionService
+     */
     @Test
     @DisplayName("1. Happy Path: Should approve transaction when all checks pass")
     void processTransaction_WhenAllChecksPass_ShouldApproveAndDebitLedger() {
@@ -133,6 +221,22 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 2: Gate 1 - Idempotency
     // =========================================================================
+
+    /**
+     * Verifies that the transaction pipeline fails fast when the idempotency check detects a duplicate.
+     *
+     * <p>This test simulates an {@link IdempotencyException} thrown by {@link IdempotencyService}
+     * and asserts that the exception is immediately propagated without any further processing.
+     *
+     * <p>Expected behaviour:
+     * <ul>
+     *   <li>{@link IdempotencyException} is re-thrown to the caller.</li>
+     *   <li>No repository or downstream service methods are invoked.</li>
+     * </ul>
+     *
+     * @see IdempotencyService
+     * @see IdempotencyException
+     */
     @Test
     @DisplayName("2. Gate 1: Should fail fast if Idempotency check fails")
     void processTransaction_WhenIdempotencyFails_ShouldRethrowImmediately() {
@@ -150,6 +254,27 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 3: Gate 2 - Identification (Lookup)
     // =========================================================================
+
+    /**
+     * Verifies that the transaction pipeline fails fast when no card is found by the blind index.
+     *
+     * <p>This test simulates a {@link VirtualCardRepository} returning {@link Optional#empty()} for the
+     * hashed PAN and asserts that {@link CardTransactionService#processTransaction(CardTransactionRequest)}
+     * immediately throws {@link BadCredentialsException} without any further processing.
+     *
+     * <p>Expected behaviour:
+     * <ul>
+     *   <li>{@link BadCredentialsException} is thrown with message "Invalid PAN".</li>
+     *   <li>Rate limiter is never consulted.</li>
+     *   <li>Ledger service is never consulted.</li>
+     * </ul>
+     *
+     * @see CardTransactionService
+     * @see VirtualCardRepository
+     * @see BadCredentialsException
+     *
+     * @apiNote Gate 2 of the security checkpoint sequence.
+     */
     @Test
     @DisplayName("3. Gate 2: Should throw BadCredentials if card not found via Blind Index")
     void processTransaction_WhenCardNotFound_ShouldThrowBadCredentials() {
@@ -167,6 +292,19 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 4: Gate 3 - Rate Limiting
     // =========================================================================
+
+    /**
+     * Ensures that the transaction pipeline fails fast when the rate limiter detects excessive requests.
+     *
+     * <p>This test configures {@link VirtualCardRepository} to return a valid {@link VirtualCard} and
+     * then instructs {@link RateLimiterService} to throw {@link RateLimitExceededException}.  The
+     * assertion verifies that the exception is propagated immediately, preventing any downstream
+     * security or business checks from executing.
+     *
+     * @see RateLimiterService
+     * @see RateLimitExceededException
+     * @see CardTransactionService
+     */
     @Test
     @DisplayName("4. Gate 3: Should propagate RateLimitExceededException")
     void processTransaction_WhenRateLimitExceeded_ShouldPropagateException() {
@@ -183,6 +321,23 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 5: Gate 4 - Authentication (CVV)
     // =========================================================================
+
+    /**
+     * <p>Verifies that {@link CardTransactionService} rejects a transaction when the incoming CVV does not match the encrypted value stored in the database.</p>
+     *
+     * <p>This test simulates a Gate 4a (CVV validation) failure by:
+     * <ul>
+     *   <li>Retrieving a {@link VirtualCard} via its hashed PAN
+     *   <item>Decrypting the stored CVV to a value different from the one sent in the request
+     *   <item>Asserting that the service throws {@link BadCredentialsException} with the message "Invalid CVV"
+     * </ul></p>
+     *
+     * <p>The purpose is to ensure that any tampering or misentry of the security code at the client side is immediately detected and rejected without proceeding to subsequent gates.</p>
+     *
+     * @see CardTransactionService
+     * @see VirtualCard
+     * @see VirtualCardRepository
+     */
     @Test
     @DisplayName("5. Gate 4a: Should throw BadCredentials on CVV Mismatch")
     void processTransaction_WhenCvvMismatch_ShouldThrowBadCredentials() {
@@ -199,6 +354,18 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 6: Gate 4 - Authentication (Expiry)
     // =========================================================================
+
+    /**
+     * Verifies that {@link CardTransactionService#processTransaction} rejects a request
+     * when the presented expiry date does not match the encrypted value stored on the
+     * {@linkplain VirtualCardRepository#findByPanFingerprint(String)}  virtual card.
+     *
+     * <p>The test encrypts an intentionally mismatched expiry ({@code "01/25"}) and
+     * expects a {@link BadCredentialsException} with the message {@code "Invalid Expiry Date"}.
+     *
+     * @see CardTransactionService
+     * @see VirtualCardRepository
+     */
     @Test
     @DisplayName("6. Gate 4b: Should throw BadCredentials on Expiry Mismatch")
     void processTransaction_WhenExpiryMismatch_ShouldThrowBadCredentials() {
@@ -216,6 +383,24 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 7: Gate 5 - Authorization (Frozen)
     // =========================================================================
+
+    /**
+     * Validates Gate 5a of the 7-Gate Security Model: a frozen card must immediately abort any transaction attempt.
+     * <p>
+     * This test ensures that when a {@link VirtualCard} exists but its {@code status} is {@code FROZEN}, the service
+     * {@link CardTransactionService#processTransaction(CardTransactionRequest)} rejects the request with an
+     * {@link AccessDeniedException}. The test verifies the repository and encryption layers are consulted before the
+     * status check, confirming that the freeze decision is made as early as possible within the security chain.
+     *
+     * <p>Sequence:
+     * <ul>
+     *   <li>Repository returns the card with {@code FROEN} status
+     *   <li>AttributeEncryptor decrypts sensitive fields
+     *   <li>Service detects frozen status and throws AccessDeniedException
+     * </ul>
+     *
+     * @see CardTransactionService
+     */
     @Test
     @DisplayName("7. Gate 5a: Should throw AccessDenied if card is FROZEN")
     void processTransaction_WhenCardFrozen_ShouldThrowAccessDenied() {
@@ -234,6 +419,17 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 8: Gate 5 - Authorization (Terminated)
     // =========================================================================
+
+    /**
+     * Verifies that {@link CardTransactionService#processTransaction} rejects a transaction
+     * when the card’s status is {@code TERMINATED}.
+     *
+     * <p>This test ensures the gate-5b security rule is enforced: any attempt to use a terminated
+     * card immediately raises {@link AccessDeniedException} with an explanatory message.
+     *
+     * @see CardTransactionService
+     * @see AccessDeniedException
+     */
     @Test
     @DisplayName("8. Gate 5b: Should throw AccessDenied if card is TERMINATED")
     void processTransaction_WhenCardTerminated_ShouldThrowAccessDenied() {
@@ -252,6 +448,28 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 9: Gate 6 - Financial Limits (Redis)
     // =========================================================================
+
+    /**
+     * Validates that {@link CardTransactionService#processTransaction} propagates
+     * {@link CardLimitExceededException} when the monthly spend limit is exceeded.
+     *
+     * <p>This test ensures the gate-6 safety check is enforced: once the aggregated
+     * spend for the current billing cycle crosses the threshold defined for the
+     * {@link VirtualCard}, the transaction is rejected before any ledger entry is
+     * created.
+     *
+     * <p>Expectations:
+     * <ul>
+     *   <li>{@link CardLimitService#checkSpendLimit} throws
+     *       {@link CardLimitExceededException}.</li>
+     *   <li>The exception is bubbled up to the caller without wrapping.</li>
+     *   <li>{@link LedgerService#recordEntry} is never invoked.</li>
+     * </ul>
+     *
+     * @see CardTransactionService
+     * @see CardLimitService
+     * @see LedgerService
+     */
     @Test
     @DisplayName("9. Gate 6: Should propagate CardLimitExceededException")
     void processTransaction_WhenMonthlyLimitExceeded_ShouldPropagateException() {
@@ -274,6 +492,20 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 10: Gate 7 - Execution (Insufficient Funds)
     // =========================================================================
+
+    /**
+     * <p>Verifies that {@link CardTransactionService#processTransaction} propagates
+     * {@link InsufficientFundsException} when the ledger rejects the entry and,
+     * crucially, does <strong>not</strong> record the spend in the downstream limit store.</p>
+     *
+     * <p>This test acts as Gate&nbsp;7 in the transaction validation pipeline, ensuring
+     * that a failed monetary check leaves no side-effects in Redis.  It also confirms
+     * that decryption of sensitive card data (CVV and expiry) is performed before the
+     * ledger call, maintaining the correct temporal order of security operations.</p>
+     *
+     * @see LedgerService
+     * @see CardLimitService
+     */
     @Test
     @DisplayName("10. Gate 7: Should propagate InsufficientFundsException and NOT update accumulator")
     void processTransaction_WhenInsufficientFunds_ShouldPropagateException() {
@@ -296,6 +528,20 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 11: Gate 7 - Unexpected Failure
     // =========================================================================
+
+    /**
+     * Verifies that when the ledger service throws an unexpected {@link RuntimeException}
+     * (e.g., database connection lost), the transaction processing logic logs the failure
+     * and re-throws the exception without marking the idempotency key as complete.
+     * <p>
+     * This behavior ensures that the caller can detect the failure and the operation remains
+     * eligible for automatic retry or manual intervention, preserving exactly-once semantics
+     * enforced by {@link IdempotencyService}.
+     *
+     * @see LedgerService
+     * @see IdempotencyService
+     * @see CardTransactionService
+     */
     @Test
     @DisplayName("11. Gate 7b: Should not complete Idempotency on Unexpected Error")
     void processTransaction_WhenLedgerFailsUnexpectedly_ShouldLogAndRethrow() {
@@ -318,6 +564,22 @@ class CardTransactionServiceTest {
     // =========================================================================
     // TEST 12: Data Integrity & Formatting
     // =========================================================================
+
+    /**
+     * Verifies that {@link CardTransactionService#processTransaction} formats the ledger
+     * description using the merchant name and MCC, and derives the reference ID
+     * deterministically from the transaction identifier.
+     *
+     * <p>This test ensures:
+     * <ul>
+     *   <li>The description follows the pattern {@code "POS: <merchant> | MCC: <code>"}</li>
+     *   <li>The reference ID is a type-3 UUID generated from the transaction ID bytes,
+     *       guaranteeing repeatability across replays</li>
+     * </ul>
+     *
+     * @see CardTransactionService
+     * @see LedgerService
+     */
     @Test
     @DisplayName("12. Integrity: Should format Description and derive ReferenceID correctly")
     void processTransaction_ShouldFormatDescriptionAndDeriveReferenceIdCorrectly() {
@@ -343,8 +605,27 @@ class CardTransactionServiceTest {
         assertThat(ledgerReq.referenceId()).isEqualTo(expectedUuid);
     }
 
+    /**
+     * Verifies that the distributed transaction compensator rolls back the Redis spend limit
+     * when the ledger service fails to persist the accounting entry.
+     *
+     * <p>This test simulates a partial failure scenario: the card limit is successfully
+     * reserved in Redis but the downstream {@link LedgerService} throws a runtime exception.
+     * The service must detect the {@code limitReserved} flag and invoke
+     * {@link CardLimitService#rollbackSpend} to release the previously reserved amount,
+     * ensuring that the customer’s available balance is not incorrectly reduced.
+     *
+     * <p>The test validates the exact compensation path by stubbing
+     * {@link LedgerService#recordEntry} to throw and then asserting that
+     * {@code cardLimitService.rollbackSpend} is called with the correct card identifier
+     * and amount.
+     *
+     * @see CardTransactionService
+     * @see CardLimitService
+     * @see LedgerService
+     */
     @Test
-    @DisplayName("Compensatory: Should rollback Redis spend when Ledger Service fails")
+    @DisplayName("Unit: Should rollback Redis spend when Ledger Service fails")
     void processTransaction_ShouldRollbackLimit_WhenLedgerFails() {
         // Arrange
         // Using existing variables from your setUp
@@ -371,8 +652,24 @@ class CardTransactionServiceTest {
         verify(cardLimitService).rollbackSpend(eq(mockCard.getId()), any(BigDecimal.class));
     }
 
+    /**
+     * Verifies that {@link CardTransactionService#processTransaction} does <strong>not</strong>
+     * trigger a rollback when the transaction fails due to an exceeded card limit.
+     *
+     * <p>This test ensures that {@link CardLimitExceededException} is treated as a business-level
+     * rejection rather than a technical failure. Because the limit is checked <em>before</em>
+     * any spend is reserved, the service must leave the limit untouched and avoid calling
+     * {@link CardLimitService#rollbackSpend}.
+     *
+     * <p>The scenario exercises the guard clause in the transaction pipeline that distinguishes
+     * between recoverable and non-recoverable error types, guaranteeing idempotent behaviour
+     * for limit-tracking operations.
+     *
+     * @see CardTransactionService
+     * @see CardLimitService
+     */
     @Test
-    @DisplayName("Compensatory: Should NOT rollback when the error IS a LimitExceededException")
+    @DisplayName("Unit: Should NOT rollback when the error IS a LimitExceededException")
     void processTransaction_ShouldNotRollback_WhenLimitAlreadyExceeded() {
         // Arrange
         when(virtualCardRepository.findByPanFingerprint(anyString())).thenReturn(Optional.of(mockCard));
@@ -393,8 +690,34 @@ class CardTransactionServiceTest {
         verify(cardLimitService, never()).rollbackSpend(any(), any());
     }
 
+    /**
+     * Verifies the transactional flow when a spend-limit reservation succeeds
+     * ({@code limitReserved = true}) but the downstream ledger service throws
+     * {@link CardLimitExceededException}.<p>
+     *
+     * This test exercises the exclusion branch in
+     * {@link CardTransactionService#processTransaction(CardTransactionRequest)}
+     * where the exception type matches the configured exclusion list, causing
+     * the framework to bypass the automatic rollback of the reserved limit.
+     *
+     * <ul>
+     *   <li>Mocks a valid {@link VirtualCard} with a real UUID to prevent NPE
+     *       during logging.</li>
+     *   <li>Stubs {@link CardLimitService#checkSpendLimit} to complete without
+     *       exception, setting {@code limitReserved = true}.</li>
+     *   <li>Forces {@link LedgerService#recordEntry} to throw
+     *       {@code CardLimitExceededException}.</li>
+     *   <li>Asserts that the same exception is propagated to the caller.</li>
+     *   <li>Confirms that {@link CardLimitService#rollbackSpend} is never
+     *       invoked because the exception is on the exclusion list.</li>
+     * </ul>
+     *
+     * @see CardTransactionService
+     * @see CardLimitService
+     * @see LedgerService
+     */
     @Test
-    @DisplayName("Coverage: Hit branch where limitReserved is true but Exception is LimitExceeded")
+    @DisplayName("Unit: Hit branch where limitReserved is true but Exception is LimitExceeded")
     void processTransaction_Coverage_LimitReservedTrue_ButExceptionIsLimitExceeded() {
         // Arrange
         // FIX: Use a REAL ID to avoid the NPE at line 82 (the logger)
@@ -423,6 +746,17 @@ class CardTransactionServiceTest {
         verify(cardLimitService, never()).rollbackSpend(any(), any());
     }
 
+    /**
+     * Validates the transaction‐processing path when {@code limitReserved} stays {@code false}.
+     * <p>
+     * This test exercises the guard‐clause branch that aborts processing before any spend
+     * reservation is created.  By injecting an invalid CVV it triggers an early security
+     * exception, ensuring that {@link CardLimitService#rollbackSpend} is never invoked and
+     * proving that the system does not attempt to compensate for an unreserved limit.
+     *
+     * @see CardTransactionService
+     * @see CardLimitService
+     */
     @Test
     @DisplayName("Coverage: Hit branch where limitReserved is false")
     void processTransaction_Coverage_LimitReservedFalse() {

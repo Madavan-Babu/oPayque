@@ -59,10 +59,36 @@ import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 /**
- * The "Chaos" Vector (Consistency & Logic).
+ * Stress harness that injects realistic chaos scenarios into the card-transaction pipeline.
  * <p>
- * Targets Fault Injection, ACID Rollbacks, Deadlocks, and Latency Checks.
- * Validates that the system behaves correctly when things go wrong.
+ * This test class hosts JUnit 5 based, containerised end-to-end probes that exercise the
+ * {@linkplain org.springframework.transaction.annotation.Transactional transactional}
+ * boundaries between PostgreSQL, Redis, and application services. Each probe simulates
+ * a production failure mode (partial write, deadlock, rate-limit bypass) and asserts
+ * that the system remains financially consistent or fails fast without data loss.
+ * <p>
+ * <b>Test Data:</b>
+ * <ul>
+ *   <li>{@code chaosUser} – synthetic {@link User} persisted via {@link UserRepository}</li>
+ *   <li>{@code chaosWallet} – multi-currency {@link Account} seeded through
+ *       {@link AccountRepository}</li>
+ *   <li>{@code chaosCard} – tokenised {@link VirtualCard} whose PAN, CVV and expiry are
+ *       encrypted with {@link AttributeEncryptor}</li>
+ * </ul>
+ * <p>
+ * <b>Externalised Configuration:</b> Properties are supplied by
+ * {@link #configureProperties(DynamicPropertyRegistry)} so that Testcontainers managed
+ * Postgres & Redis instances are injected into Spring without touching code.
+ *
+ * @author Madavan Babu
+ * @since 2026
+ * @see UserRepository
+ * @see AccountRepository
+ * @see VirtualCardRepository
+ * @see LedgerRepository
+ * @see CardLimitService
+ * @see RateLimiterService
+ * @see LedgerService
  */
 @Slf4j
 @SpringBootTest
@@ -138,6 +164,24 @@ class CardTransactionChaosStressTest {
     private final String RAW_CVV = "123";
     private final String RAW_EXPIRY = "12/30";
 
+    /**
+     * Resets the test environment to a deterministic, bank-grade baseline before every chaos scenario.
+     * <p>
+     * This method guarantees:
+     * <ul>
+     *   <li>Redis is purged of rate-limiter and spend counters.</li>
+     *   <li>Postgres is rolled back to an empty ledger with no phantom money.</li>
+     *   <li>A synthetic “Chaos Monkey” customer is created with a €100 000 funded wallet and an active virtual card.</li>
+     * </ul>
+     * <p>
+     * The resulting fixture is used by all stress tests to ensure repeatable failures without cross-run contamination.
+     *
+     * @see CardTransactionChaosStressTest
+     * @see User
+     * @see Account
+     * @see VirtualCard
+     * @see LedgerService
+     */
     @BeforeEach
     void setup() {
         // Clean Slate

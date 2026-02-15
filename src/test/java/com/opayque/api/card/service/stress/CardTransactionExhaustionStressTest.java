@@ -59,10 +59,53 @@ import static org.mockito.Mockito.doNothing;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 /**
- * The "Exhaustion" Vector (Infrastructure & Pools).
  * <p>
- * Targets System Capacity by flooding it with unique data to drain resources.
- * Validates Pool Sizing, Latency Recovery, and Cryptographic Saturation.
+ * Integration test suite that deliberately stresses the card‑transaction processing
+ * pipeline to verify resilience under extreme load conditions.
+ * </p>
+ *
+ * <p>
+ * The test class simulates two distinct attack scenarios:
+ * </p>
+ *
+ * <ul>
+ *   <li>
+ *     <b>Global Botnet (Connection Starvation)</b> – launches {@code 1000} concurrent
+ *     threads, each executing a distinct transaction against a pool of only {@code 10}
+ *     {@link com.zaxxer.hikari.HikariDataSource} connections and a limited Redis client
+ *     pool. The goal is to provoke connection‑pool exhaustion, observe
+ *     {@link java.sql.SQLTransientConnectionException} (or similar timeout) handling,
+ *     and confirm that a subsequent “probe” transaction succeeds without manual
+ *     intervention.
+ *   </li>
+ *   <li>
+ *     <b>CPU Burner (Crypto Saturation)</b> – runs a single‑threaded, high‑throughput loop
+ *     that repeatedly encrypts/decrypts payloads using AES‑256. This stresses the
+ *     {@link AttributeEncryptor} and measures transactions‑per‑second
+ *     (TPS) to ensure the cryptographic path does not become a bottleneck (minimum
+ *     {@code > 50 TPS} is asserted).
+ *   </li>
+ * </ul>
+ *
+ * <p>
+ * By exercising both I/O‑bound (database/Redis) and CPU‑bound (encryption) pathways,
+ * the suite validates that the application satisfies bank‑grade non‑functional
+ * requirements: graceful degradation, automatic pool replenishment, and
+ * deterministic recovery.
+ * </p>
+ *
+ * @author Madavan Babu
+ * @since 2026
+ *
+ * @see com.opayque.api.card.controller.CardController}
+ * @see com.opayque.api.card.service.CardTransactionService
+ * @see UserRepository
+ * @see AccountRepository
+ * @see VirtualCardRepository
+ * @see LedgerRepository
+ * @see LedgerService
+ * @see AttributeEncryptor
+ * @see RateLimiterService
  */
 @Slf4j
 @SpringBootTest
@@ -83,6 +126,31 @@ class CardTransactionExhaustionStressTest {
     static GenericContainer<?> redis = new GenericContainer<>(DockerImageName.parse("redis:7.0-alpine"))
             .withExposedPorts(6379);
 
+    /**
+     * Configures dynamic Spring properties for the {@code CardTransactionExhaustionStressTest}.
+     * <p>
+     * The method injects a deliberately constrained environment into the test
+     * {@link DynamicPropertyRegistry} to simulate resource starvation scenarios.
+     * By limiting the HikariCP connection pool to only ten connections and
+     * configuring minimal idle connections, the test forces concurrent threads
+     * to contend for database connections, thereby exposing potential bottlenecks
+     * in transaction handling, retry logic, and fail‑over behaviour.
+     * <p>
+     * In addition to the primary datasource, the method also configures:
+     * <ul>
+     *   <li>Liquibase migration settings that point to the same test container.</li>
+     *   <li>Hibernate dialect and DDL validation to ensure schema correctness.</li>
+     *   <li>Redis connection details for caching and rate‑limiting services.</li>
+     * </ul>
+     * This holistic configuration ensures that both relational and NoSQL resources
+     * are exercised under pressure, reflecting realistic production failure modes.
+     *
+     * @param registry the {@link DynamicPropertyRegistry} used to register the
+     *                 dynamic {@code spring.*} properties for the test context.
+     *
+     * @see com.opayque.api.card.controller.CardController
+     * @see com.opayque.api.card.service.CardTransactionService
+     */
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) {
         // === CONSTRICTION SETTINGS (Simulate Resource Starvation) ===
@@ -172,6 +240,53 @@ class CardTransactionExhaustionStressTest {
     // Store pre-provisioned cards
     private List<String> botnetPans;
 
+    /**
+     * Sets up a clean testing environment for {@link CardTransactionExhaustionStressTest}.
+     * <p>
+     * This method flushes the embedded Redis instance and removes all persisted rows from
+     * {@link com.opayque.api.wallet.repository.LedgerRepository},
+     * {@link com.opayque.api.card.repository.VirtualCardRepository},
+     * {@link com.opayque.api.wallet.repository.AccountRepository} and
+     * {@link com.opayque.api.identity.repository.UserRepository} to guarantee an isolated baseline for each
+     * test execution.
+     * <p>
+     * It then creates a dedicated {@code stressUser} and an associated {@code stressWallet}
+     * (an {@link com.opayque.api.wallet.entity.Account}) with infinite funding. The funding entry is
+     * recorded via
+     * {@link com.opayque.api.wallet.service.LedgerService#recordEntry(CreateLedgerEntryRequest)} (com.opayque.api.dto.CreateLedgerEntryRequest)}.
+     * The relationship between {@code User} and {@code Account} models ownership of a wallet,
+     * enabling subsequent transaction‑stress scenarios.
+     * <p>
+     * Finally, {@code BOTNET_SIZE} virtual cards are pre‑provisioned and linked to the wallet.
+     * Each {@link com.opayque.api.card.entity.VirtualCard} is persisted with encrypted CVV and expiry,
+     * a generated PAN and a monthly limit. This bulk provisioning isolates issuance load from
+     * transaction load, allowing the test to focus on DB‑pool exhaustion under concurrent
+     * transaction execution.
+     * <p>
+     * <b>Database mapping details</b>
+     * <ul>
+     *   <li>{@link com.opayque.api.identity.entity.User} – {@code @Table(name = "users")} with columns
+     *       {@code email} (unique, not null), {@code full_name}, {@code password}, {@code role}.</li>
+     *   <li>{@link com.opayque.api.wallet.entity.Account} – {@code @Table(name = "accounts")} with columns
+     *       {@code id} (identity primary key), {@code user_id} (FK → users.id, not null),
+     *       {@code currency_code}, {@code iban}.</li>
+     *   <li>{@link com.opayque.api.card.entity.VirtualCard} – {@code @Table(name = "virtual_cards")} with columns
+     *       {@code id} (identity primary key), {@code account_id} (FK → accounts.id, not null),
+     *       {@code pan} (unique, not null), {@code cvv}, {@code expiry_date},
+     *       {@code cardholder_name}, {@code status}, {@code monthly_limit}.</li>
+     * </ul>
+     *
+     * @author Madavan Babu
+     * @since 2026
+     *
+     * @see com.opayque.api.card.controller.CardController
+     * @see com.opayque.api.card.service.CardTransactionService
+     * @see com.opayque.api.identity.repository.UserRepository
+     * @see com.opayque.api.wallet.repository.AccountRepository
+     * @see com.opayque.api.card.repository.VirtualCardRepository
+     * @see com.opayque.api.wallet.repository.LedgerRepository
+     * @see com.opayque.api.wallet.service.LedgerService
+     */
     @BeforeEach
     void setup() {
         // Clean Slate

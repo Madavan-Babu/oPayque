@@ -48,17 +48,29 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
 
 /**
- * Story 4.4: Card Limit Update Stress Tests.
- * <p>
- * Validates the resiliency of the Limit Management subsystem under "Death Star" load.
- * <p>
- * <b>Scope:</b>
- * 1. Rate Limiting (The "Limit Spam" Torture).
- * 2. Idempotency (The "Stuttering Finger" Storm).
- * 3. Optimistic Locking (The "Lost Update" Race).
- * <p>
- * <b>Infrastructure:</b>
- * Runs against isolated Dockerized Postgres 15 and Redis 7 containers.
+ * Stress-tests the card-limit update flow under extreme concurrency.
+ *
+ * <p>This class orchestrates three high-volume scenarios that exercise the
+ * {@link RateLimiterService}, {@link IdempotencyService} and optimistic-locking
+ * mechanisms in the same test run. It uses a shared {@code postgres} test
+ * container, an embedded {@code redis} instance and the real Spring
+ * {@link CardIssuanceService} to verify that protective layers behave
+ * deterministically when fifty threads hammer the same card in a 100 ms window.
+ *
+ * <p>Each test method isolates one concern (rate limiting, idempotency or lost
+ * update) by selectively mocking the other two, ensuring that the measured
+ * outcome is caused solely by the subsystem under test. Atomic counters,
+ * dedicated {@code stressUser}/{@code stressCard} fixtures and repeatable
+ * random seeds guarantee deterministic results across CI runs.
+ *
+ * @see com.opayque.api.card.controller.CardController
+ * @see CardIssuanceService
+ * @see VirtualCardRepository
+ * @see RateLimiterService
+ * @see IdempotencyService
+ *
+ * @author Madavan Babu
+ * @since 2026
  */
 @Slf4j
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -122,6 +134,24 @@ class CardLimitUpdateStressTest {
     private User stressUser;
     private VirtualCard stressCard;
 
+    /**
+     * Prepares a deterministic test environment for the card-limit update stress scenarios.
+     * <p>
+     * This method runs before each test and performs the following steps:
+     * <ol>
+     * <li>Clears the repositories in reverse dependency order to avoid constraint violations.</li>
+     * <li>Creates a fresh {@link User} with a unique email to ensure a new rate-limit bucket.</li>
+     * <li>Creates an {@link Account} linked to the user and a {@link VirtualCard} linked to the account.</li>
+     * <li>Injects the user into the Spring Security context so that downstream services can resolve the principal.</li>
+     * </ol>
+     * <p>
+     * Redis is intentionally left untouched so that rate-limit counters survive across tests; the uniqueness of the user
+     * guarantees that each test receives its own bucket key.
+     *
+     * @see CardLimitUpdateStressTest#concurrentLimitUpdate_RateLimit_TortureTest()
+     * @see CardLimitUpdateStressTest#concurrentLimitUpdate_Idempotency_TortureTest()
+     * @see CardLimitUpdateStressTest#concurrentLimitUpdate_OptimisticLocking_TortureTest()
+     */
     @BeforeEach
     void setUp() {
         // 1. Clean Slate (Reverse Dependency Order)

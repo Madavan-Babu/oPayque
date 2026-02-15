@@ -12,12 +12,26 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+
+
 /**
- * Public-facing endpoint for simulating external card network events.
+ * REST façade that exposes a deterministic, idempotent endpoint for simulating card-based Point-of-Sale transactions.
  * <p>
- * acts as a "Mock Merchant" or "Payment Gateway" callback.
- * * <b>Security Note:</b> This controller accepts raw card data (PAN/CVV).
- * Ensure strict TLS encryption is active in production.
+ * This controller acts as the north-bound gateway for ISO-8583 style payloads and is intentionally kept thin; all
+ * business rules (risk scoring, velocity checks, merchant limits, etc.) are delegated to the {@link CardTransactionService}
+ * to preserve a clean separation of concerns and to simplify unit testing of the web layer.
+ * <p>
+ * The resource path {@code /api/v1/simulation/card-transaction} is versioned and is designed to remain stable across
+ * minor releases.  Every request is fully logged (PII masked) and is traceable via the {@code externalTransactionId}
+ * supplied by the caller.
+ * <p>
+ * <b>Thread-safety:</b> The class is stateless and relies on injected dependencies that are themselves thread-safe.
+ *
+ * @author Madavan Babu
+ * @since 2026
+ * @see CardTransactionService
+ * @see CardTransactionRequest
+ * @see CardTransactionResponse
  */
 @RestController
 @RequestMapping("/api/v1/simulation")

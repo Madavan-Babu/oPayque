@@ -7,6 +7,7 @@ import com.opayque.api.card.entity.PaymentStatus;
 import com.opayque.api.card.entity.VirtualCard;
 import com.opayque.api.card.repository.VirtualCardRepository;
 import com.opayque.api.infrastructure.encryption.AttributeEncryptor;
+import com.opayque.api.infrastructure.exception.CardLimitExceededException;
 import com.opayque.api.infrastructure.exception.IdempotencyException;
 import com.opayque.api.infrastructure.idempotency.IdempotencyService;
 import com.opayque.api.infrastructure.ratelimit.RateLimiterService;
@@ -26,9 +27,26 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * Orchestrator service for simulating external card network transactions.
+ * Orchestrates the complete life-cycle of a point-of-sale card transaction.
  * <p>
- * Flows: Idempotency -> Lookup -> Auth -> Risk -> Ledger -> Response.
+ * This service enforces the domain’s “spend first, record second” semantics by
+ * atomically reserving the spend in Redis <em>before</em> touching the ledger.
+ * If the ledger write fails, the Redis reservation is rolled back, preventing
+ * the “zombie-authorised” state that would otherwise leak money from the
+ * cardholder’s monthly limit.
+ * <p>
+ * The operation is idempotent (keyed by {@code externalTransactionId}) and
+ * guarded by a per-card rate limiter (20 TPS). All cryptographic card data
+ * (PAN, CVV, expiry) are stored encrypted at rest; only blind indices are used
+ * for look-ups.
+ *
+ * @author Madavan Babu
+ * @since 2026
+ * @see VirtualCardRepository
+ * @see CardLimitService
+ * @see LedgerService
+ * @see IdempotencyService
+ * @see RateLimiterService
  */
 @Service
 @RequiredArgsConstructor
@@ -46,10 +64,50 @@ public class CardTransactionService {
     private static final long RATE_LIMIT_QUOTA = 20;
 
     /**
-     * Processes a simulated card swipe (POS Transaction).
+     * Processes a card-not-present transaction end-to-end.
      *
-     * @param request The ISO-8583 style request payload.
-     * @return The transaction result.
+     * <p>This method implements the Saga (Compensation) pattern: if the ledger write fails after the
+     * Redis-based monthly limit has been atomically reserved, the reserved amount is rolled back to
+     * prevent zombie spends.
+     *
+     * <p>Idempotency is enforced with {@code txn:{@code externalTransactionId}} keys and a static TTL.
+     * Duplicate requests within the TTL return the original response without re-processing.
+     *
+     * <p>The flow:
+     * <ul>
+     *   <li>Idempotency guard (fail-fast)</li>
+     *   <li>Blind-index PAN lookup (O(1) search)</li>
+     *   <li>Per-card rate-limit check</li>
+     *   <li>CVV & expiry validation</li>
+     *   <li>Card status validation ({@link CardStatus#ACTIVE} only)</li>
+     *   <li>Atomic monthly-limit reservation in Redis</li>
+     *   <li>Ledger entry creation</li>
+     *   <li>Idempotency completion</li>
+     * </ul>
+     *
+     * <p>Rollback semantics:
+     * <ul>
+     *   <li>{@code BadCredentialsException} and {@code AccessDeniedException} are <b>not</b> rolled back;
+     *       they are surfaced to the caller immediately.</li>
+     *   <li>Any other exception triggers compensation: if the Redis limit was successfully reserved
+     *       but the ledger write failed, the reserved amount is decremented.</li>
+     * </ul>
+     *
+     * @param request the immutable request containing PAN, CVV, expiry, amount, currency,
+     *                merchant data, and the client-supplied external transaction identifier
+     *
+     * @return a response with the deterministic {@code transactionId}, {@link PaymentStatus#APPROVED},
+     *         an approval code, and the processing timestamp
+     *
+     * @throws IdempotencyException      if an identical request is already being processed
+     * @throws BadCredentialsException     if the PAN is unknown or security data is invalid
+     * @throws AccessDeniedException     if the card is not {@link CardStatus#ACTIVE}
+     * @throws CardLimitExceededException if the monthly limit is exhausted
+     *
+     * @see VirtualCardRepository
+     * @see CardLimitService
+     * @see LedgerService
+     * @see IdempotencyService
      */
     @Transactional(noRollbackFor = {BadCredentialsException.class, AccessDeniedException.class})
     public CardTransactionResponse processTransaction(CardTransactionRequest request) {
@@ -158,7 +216,22 @@ public class CardTransactionService {
     }
 
     /**
-     * Decrypts DB values and compares them with the cleartext request.
+     * Validates the cardholder security data (CVV and expiry) against the provided {@code request}.
+     *
+     * <p>This method decrypts the encrypted CVV and expiry stored in the {@link VirtualCard} entity
+     * and compares them with the corresponding values in the {@link CardTransactionRequest}. If either
+     * value does not match, a {@link BadCredentialsException} is thrown and a security alert is
+     * logged with the card's unique identifier.
+     *
+     * <p>This check is a critical part of PCI-DSS compliant transaction processing and ensures that
+     * the card-not-present (CNP) transaction is initiated by a legitimate cardholder.
+     *
+     * @param card    the {@link VirtualCard} entity containing encrypted CVV and expiry data
+     * @param request the {@link CardTransactionRequest} containing the plaintext CVV and expiry to validate against
+     *
+     * @throws BadCredentialsException if the CVV or expiry date does not match the stored values
+     *
+     * @see CardTransactionService#processTransaction(CardTransactionRequest)
      */
     private void validateCardSecurity(VirtualCard card, CardTransactionRequest request) {
         String decryptedCvv = attributeEncryptor.convertToEntityAttribute(card.getCvv());

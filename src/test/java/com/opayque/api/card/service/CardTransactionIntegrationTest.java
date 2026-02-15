@@ -1,6 +1,7 @@
 package com.opayque.api.card.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opayque.api.card.controller.CardController;
 import com.opayque.api.card.dto.CardTransactionRequest;
 import com.opayque.api.card.entity.CardStatus;
 import com.opayque.api.card.entity.PaymentStatus;
@@ -47,13 +48,50 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The "Iceberg" Integration Test for Card Transactions.
+ * Integration test suite that validates the complete card‑transaction workflow
+ * across the persistence, caching and service layers.
  * <p>
- * Verifies the full vertical slice of a payment:
- * Request -> Controller -> Auth -> Limits (Redis) -> Ledger (Postgres) -> Response.
+ * The purpose of this class is to ensure that the system behaves correctly for
+ * a variety of realistic scenarios, ranging from a flawless debit to multiple
+ * error conditions such as limit violations, insufficient wallet balance,
+ * blind‑index mismatches, frozen card status, idempotency replays and rate‑limit
+ * breaches. By exercising the full stack—including PostgreSQL, Redis,
+ * Spring MVC, encryption utilities and domain services—the tests provide confidence
+ * that the end‑to‑end processing logic satisfies both functional and non‑functional
+ * requirements.
  * <p>
- * <b>Philosophy:</b> No Mocks. Real Encryption. Real Database. Real Latency.
- * <b>Compliance:</b> Enforces oPayque BIN (171103) and IBAN currencies (EUR/GBP/CHF).
+ * Key architectural components exercised by the tests:
+ * <ul>
+ *   <li>HTTP entry point: {@link CardController} – verifies response
+ *       codes, payloads and idempotency handling.</li>
+ *   <li>Business logic: {@link CardTransactionService} – drives validation,
+ *       limit checking and status enforcement.</li>
+ *   <li>Persistence: {@link LedgerRepository}, {@link UserRepository},
+ *       {@link AccountRepository}, {@link VirtualCardRepository} – confirms
+ *       ledger entries, account balances and card metadata are correctly stored.</li>
+ *   <li>Caching: {@link RedisTemplate} – asserts
+ *       that spend accumulators are created, updated or left untouched according
+ *       to the scenario.</li>
+ *   <li>Encryption: {@link AttributeEncryptor} – guarantees that sensitive fields
+ *       (PAN, CVV, expiry) are stored encrypted and that decryption failures are
+ *       handled securely.</li>
+ * </ul>
+ * <p>
+ * Test fixtures (prefixed with <code>golden</code>) provide a fully populated user,
+ * wallet and virtual card with known encrypted values. Raw card data such as
+ * {@code RAW_CVV}, {@code RAW_EXPIRY} and {@code rawPan} are used to construct
+ * request payloads. The {@code @DynamicPropertySource} method supplies containerised
+ * PostgreSQL and Redis instances, ensuring reproducible isolated environments.
+ *
+ * @author Madavan Babu
+ * @since 2026
+ *
+ * @see CardController
+ * @see CardTransactionService
+ * @see LedgerRepository
+ * @see UserRepository
+ * @see AccountRepository
+ * @see VirtualCardRepository
  */
 @SpringBootTest
 @AutoConfigureMockMvc(addFilters = false) //Bypass Security Filters to allow "Public" Simulation traffic
@@ -118,6 +156,46 @@ class CardTransactionIntegrationTest {
     private final String RAW_EXPIRY = "12/30";
     private String rawPan; // Initialized in setup() using BIN
 
+    /**
+     * Initializes the integration‑test “clean room” before each test case.
+     *
+     * <p>This method performs a deterministic setup of the persistence layer and in‑memory
+     * data stores so that every {@code @Test} runs against an identical baseline.
+     *
+     * <p>The steps are:
+     *
+     * <ul>
+     *   <li><b>Dynamic PAN creation</b> – Constructs a 16‑digit PAN using the configured
+     *       {@code opayqueBin} and stores it in {@code rawPan} for later use.</li>
+     *
+     *   <li><b>Infrastructure flush</b> – Clears Redis via
+     *       {@code redisTemplate.getRequiredConnectionFactory().getConnection()
+     *        .serverCommands().flushAll()} and empties all JPA tables in the correct order
+     *       (Ledger → VirtualCard → Account → User) to respect foreign‑key constraints.</li>
+     *
+     *   <li><b>Golden user provisioning</b> – Persists a privileged {@link User} record
+     *       with role {@link Role#CUSTOMER} and keeps the reference in {@code goldenUser}.</li>
+     *
+     *   <li><b>Golden wallet provisioning</b> – Creates an {@link Account} for the golden
+     *       user in EUR, with a PSD2‑compliant IBAN, and stores it in {@code goldenWallet}.</li>
+     *
+     *   <li><b>Initial funding</b> – Uses the real {@link LedgerService} to record a credit
+     *       entry of €10 000 on the golden wallet, ensuring ledger consistency rather than
+     *       inserting raw rows.</li>
+     *
+     *   <li><b>Golden virtual card issuance</b> – Persists a {@link VirtualCard} linked to the
+     *       golden wallet. Because the service layer is bypassed, the sensitive fields
+     *       {@code cvv} and {@code expiryDate} are manually encrypted via
+     *       {@link AttributeEncryptor#convertToDatabaseColumn(String)} (Object)}.</li>
+     * </ul>
+     *
+     * <p>After execution the test suite has a fully functional user, account, ledger entry
+     * and active virtual card ready for the transaction scenarios defined in this class.
+     *
+     * @see CardController
+     * @see CardTransactionService
+     * @see VirtualCardRepository
+     */
     @BeforeEach
     void setup() {
         // 0. Initialize Dynamic Data

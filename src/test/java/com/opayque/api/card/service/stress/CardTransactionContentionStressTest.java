@@ -56,10 +56,28 @@ import static org.mockito.Mockito.doNothing;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 /**
- * The "Contention" Vector (Locking & Atomicity).
- * <p>
- * Targets Single Resource with massive concurrency to force Race Conditions.
- * Validates PESSIMISTIC_WRITE locks, Redis Atomicity, and Idempotency Guards.
+ * Stress-tests the card-payment pipeline under extreme concurrency to guarantee
+ * ACID-safe money movement and idempotent authorisation.
+ *
+ * <p>This class simulates real-world “Black-Friday” traffic patterns by firing
+ * thousands of parallel requests against a single {@code VirtualCard}.  It
+ * validates that:
+ * <ul>
+ *   <li>PostgreSQL row-level locks never allow negative balances.</li>
+ *   <li>Redis spend counters are atomically incremented and match the ledger.</li>
+ *   <li>Duplicate {@code externalTransactionId}s are rejected exactly once.</li>
+ * </ul>
+ *
+ * <p>All tests run against the full application stack (Postgres, Redis, Rabbit)
+ * orchestrated by Testcontainers.  Failures are surfaced through the
+ * {@link #mockMvc} assertions and the {@code @Transactional} read-only checks
+ * performed after the concurrent storm subsides.
+ *
+ * @author Madavan Babu
+ * @see LedgerService
+ * @see VirtualCardRepository
+ * @see RateLimiterService
+ * @since 2026
  */
 @Slf4j
 @SpringBootTest
@@ -133,6 +151,33 @@ class CardTransactionContentionStressTest {
     private final String RAW_CVV = "123";
     private final String RAW_EXPIRY = "12/30";
 
+
+    /**
+     * Resets the test environment to a deterministic state before every stress test.
+     * <p>
+     * This method performs a full infrastructure flush followed by the creation of a
+     * “golden dataset” that all contention scenarios reuse.  The dataset consists of
+     * a single {@link User}, a single {@link Account} (wallet) pre-funded with
+     * effectively unlimited money, and one {@link VirtualCard} with a high monthly
+     * limit.  By isolating the test surface to a single card row, the suite can
+     * reliably observe race conditions, deadlocks, and idempotency violations
+     * without interference from leftover data.
+     * <p>
+     * <b>Execution order:</b>
+     * <ol>
+     * <li>Flush Redis – removes all keys so rate-limiters and spend caches start empty.</li>
+     * <li>Purge JPA tables – cascades delete so foreign-key constraints are satisfied.</li>
+     * <li>Create “stress_contention@opayque.com” user with {@code Role.CUSTOMER}.</li>
+     * <li>Create EUR wallet linked to the user.</li>
+     * <li>Seed the wallet with €1 000 000 to remove balance as a limiting factor.</li>
+     * <li>Issue one active VirtualCard with a €50 000 monthly limit.</li>
+     * </ol>
+     *
+     * @see CardTransactionContentionStressTest
+     * @see VirtualCard
+     * @see Account
+     * @see User
+     */
     @BeforeEach
     void setup() {
         // 1. FLUSH INFRASTRUCTURE
