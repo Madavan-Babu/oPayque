@@ -47,7 +47,7 @@ public class IbanGeneratorImpl implements IbanGenerator {
         Long uniqueId = accountRepository.getNextAccountNumber();
 
         // 3. BBAN Construction: Structure: [Country(2)] [Check(2)] [BBAN(Remainder)].
-        // Padds the sequence value to fulfill the jurisdiction's specific length requirement.
+        // Pads the sequence value to fulfill the jurisdiction's specific length requirement.
         int bbanLength = metadata.getTotalLength() - 4;
         String bban = String.format("%0" + bbanLength + "d", uniqueId);
 

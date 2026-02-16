@@ -104,21 +104,23 @@ class IdempotencyServiceTest {
     void shouldThrowWhenKeyExists() {
         // 1. Arrange
         String idempotencyKey = "req-duplicate";
-        String redisKey = KEY_PREFIX + idempotencyKey;
+        String redisKey = "idempotency:" + idempotencyKey;
         String existingTxId = "tx-999-completed";
 
         // Mock: SETNX returns FALSE (Lock failed)
-        given(valueOperations.setIfAbsent(eq(redisKey), eq("PENDING"), eq(Duration.ofHours(24))))
+        given(valueOperations.setIfAbsent(eq(redisKey), eq("PENDING"), any(Duration.class)))
                 .willReturn(false);
 
         // Mock: Fetch existing value to enrich the error message
         given(valueOperations.get(redisKey)).willReturn(existingTxId);
 
         // 2. Act & Assert
-        assertThatThrownBy(() -> idempotencyService.lock(idempotencyKey))
+        // We use check() because lock() is the "Safe" version that returns boolean false.
+        // We want to verify the specific message content produced by check().
+        assertThatThrownBy(() -> idempotencyService.check(idempotencyKey)) // <-- CHANGE lock() to check()
                 .isInstanceOf(IdempotencyException.class)
-                .hasMessageContaining(idempotencyKey)
-                .hasMessageContaining(existingTxId); // "Premium" touch: tells user the conflicting ID
+                .hasMessageContaining(existingTxId) // Verifies the "Premium" ID reporting
+                .hasMessageContaining("Already processed");
     }
 
     /**
@@ -172,7 +174,7 @@ class IdempotencyServiceTest {
         // MUST throw ServiceUnavailableException (503), NOT generic Exception
         assertThatThrownBy(() -> idempotencyService.lock(key))
                 .isInstanceOf(ServiceUnavailableException.class)
-                .hasMessage("Transaction service temporarily unavailable. Please try again.");
+                .hasMessage("Service temporarily unavailable.");
     }
 
     /// Scenario: Completion Failure (Fail Open).
@@ -198,5 +200,30 @@ class IdempotencyServiceTest {
         // Assert
         // We verified it didn't crash. Ideally, we would verify the log,
         // but verifying no exception is sufficient for "Fail Open" logic.
+    }
+
+    @Test
+    @DisplayName("Lock: Should catch IdempotencyException and return false on collision")
+    void shouldReturnFalse_WhenLockCollisionOccurs() {
+        // 1. Arrange
+        String key = "duplicate-lock-request";
+        String redisKey = "idempotency:" + key; // Matches your KEY_PREFIX logic
+
+        // Mock: SETNX returns false (Lock is held by another process)
+        given(valueOperations.setIfAbsent(eq(redisKey), eq("PENDING"), any(Duration.class)))
+                .willReturn(false);
+
+        // Mock: Get returns an existing transaction ID (Triggering the IdempotencyException inside check())
+        given(valueOperations.get(redisKey)).willReturn("tx-existing-123");
+
+        // 2. Act
+        boolean acquired = idempotencyService.lock(key);
+
+        // 3. Assert
+        // This confirms we entered the 'catch (IdempotencyException e)' block
+        // and executed the 'return false' line.
+        assertThat(acquired)
+                .as("Should return false instead of throwing exception")
+                .isFalse();
     }
 }

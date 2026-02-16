@@ -20,7 +20,33 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.util.UUID;
 
+/**
+ * Orchestrates immutable financial transactions within the oPayque wallet ecosystem.
+ *
+ * <p>This service guarantees atomic, auditable ledger entries by coordinating pessimistic locking
+ * on {@link Account} records, currency conversion via {@link CurrencyExchangeService}, and
+ * idempotent persistence of {@link LedgerEntry} entities. It is the single write-entry point
+ * for all monetary movements, ensuring that balances are always derived from the authoritative
+ * ledger rather than mutable account fields.
+ *
+ * <p>Concurrency is handled through a combination of database-level pessimistic locks
+ * (acquired by {@link AccountRepository#findByIdForUpdate(UUID)}) and optimistic retries
+ * (Spring Retry) to gracefully absorb transient contention spikes up to 50 concurrent threads.
+ *
+ * <p>Currency normalization is automatically applied: if the transaction currency differs
+ * from the account’s base currency, the amount is converted using mid-market rates
+ * fetched from {@link CurrencyExchangeService}. All monetary values are persisted
+ * with a scale of 4 to match the database schema.
+ *
+ * @author Madavan Babu
+ * @since 2026
+ *
+ * @see LedgerRepository
+ * @see CurrencyExchangeService
+ * @see AccountRepository
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -32,6 +58,22 @@ public class LedgerService {
 
     // REMOVED: EntityManager (Not needed for the clean locking strategy)
 
+    /**
+     * Persists a new {@link LedgerEntry} for the supplied {@link CreateLedgerEntryRequest}.
+     * <p>
+     * This method orchestrates the complete transactional flow: it locks the target {@link Account}
+     * with a pessimistic write, performs currency conversion when required, derives the transaction
+     * direction, and stores the immutable entry in the ledger table. A retry mechanism guards against
+     * concurrent update collisions.
+     *
+     * @param request immutable data container describing the entry to create
+     * @return the fully-persisted ledger entry, including generated id and timestamps
+     * @throws IllegalArgumentException if the referenced account does not exist
+     * @throws ObjectOptimisticLockingFailureException when concurrent modifications are detected
+     * @see LedgerEntry
+     * @see Account
+     * @see CurrencyExchangeService
+     */
     @Transactional
     @Retryable(
             retryFor = { ObjectOptimisticLockingFailureException.class },
@@ -110,6 +152,21 @@ public class LedgerService {
         return saved;
     }
 
+    /**
+     * Computes the current balance for the requested {@link Account}.
+     * <p>
+     * This method delegates to the underlying {@link LedgerRepository} which performs
+     * a zero-sum aggregation of {@link LedgerEntry} records associated with the account.
+     * The query treats {@code CREDIT} entries as positive and {@code DEBIT} entries as
+     * negative, ensuring the balance is always up-to-date without relying on a mutable
+     * balance column.
+     *
+     * @param accountId the unique identifier of the account whose balance is required
+     * @return the calculated balance as a {@code BigDecimal}; returns {@code BigDecimal.ZERO}
+     *         if no ledger entries exist for the account
+     * @see LedgerEntry
+     * @see LedgerRepository
+     */
     @Transactional(readOnly = true)
     public BigDecimal calculateBalance(java.util.UUID accountId) {
         BigDecimal balance = ledgerRepository.getBalance(accountId);

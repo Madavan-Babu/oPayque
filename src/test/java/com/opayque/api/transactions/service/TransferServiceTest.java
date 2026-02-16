@@ -91,7 +91,7 @@ class TransferServiceTest {
                 .currencyCode("USD")
                 .build();
 
-        given(accountService.getAccountById(senderId)).willReturn(senderAccount);
+        given(accountService.getAccountForUpdate(senderId)).willReturn(senderAccount);
         given(accountService.getAccountsForUser(receiverEmail)).willReturn(List.of(receiverAccount));
         given(ledgerService.calculateBalance(senderId)).willReturn(new BigDecimal("500.00"));
 
@@ -139,7 +139,8 @@ class TransferServiceTest {
         User receiverUser = User.builder().id(UUID.randomUUID()).build(); // Distinct ID
         Account receiverAccount = Account.builder().id(UUID.randomUUID()).user(receiverUser).currencyCode("USD").build();
 
-        given(accountService.getAccountById(senderId)).willReturn(senderAccount);
+        //FIX: Updated method call
+        given(accountService.getAccountForUpdate(senderId)).willReturn(senderAccount);
         // FIX: Provide the receiver wallet so validation passes
         given(accountService.getAccountsForUser(receiverEmail)).willReturn(List.of(receiverAccount));
 
@@ -178,7 +179,8 @@ class TransferServiceTest {
         User sameUserReceiver = User.builder().id(sameUserId).email(userEmail).build();
         Account receiverAccount = Account.builder().id(UUID.randomUUID()).user(sameUserReceiver).currencyCode("USD").build();
 
-        given(accountService.getAccountById(senderId)).willReturn(myAccount);
+        //FIX: Updated method call
+        given(accountService.getAccountForUpdate(senderId)).willReturn(myAccount);
         given(accountService.getAccountsForUser(userEmail)).willReturn(List.of(receiverAccount));
 
         assertThatThrownBy(() ->
@@ -238,7 +240,8 @@ class TransferServiceTest {
                 .build();
 
         // Note: If you applied the "Double Spend" hardening, change this to getAccountForWrite(senderId)
-        given(accountService.getAccountById(senderId)).willReturn(brokenSenderAccount);
+        //FIX: Updated method call
+        given(accountService.getAccountForUpdate(senderId)).willReturn(brokenSenderAccount);
 
         // Ensure receiver lookup succeeds so we hit the specific if() block
         given(accountService.getAccountsForUser(receiverEmail)).willReturn(List.of(receiverAccount));
@@ -281,7 +284,8 @@ class TransferServiceTest {
                 .currencyCode(currency)
                 .build();
 
-        given(accountService.getAccountById(senderId)).willReturn(senderAccount);
+        //FIX: Updated method call
+        given(accountService.getAccountForUpdate(senderId)).willReturn(senderAccount);
         given(accountService.getAccountsForUser(receiverEmail)).willReturn(List.of(brokenReceiverAccount));
 
         // 2. Act & Assert

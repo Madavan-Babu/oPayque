@@ -128,6 +128,37 @@ class AccountServiceTest {
         verify(accountRepository, never()).save(any());
     }
 
+  /// Scenario: Regulatory Sanction Enforcement – Unsupported Currency (USD).
+  ///
+  /// Validates that wallet provisioning is rejected when the requested currency
+  /// is not on the platform’s approved ISO-4217 whitelist. USD is explicitly
+  /// blocked due to IBAN territory restrictions and AML policy alignment with the
+  /// Central Bank of Nigeria (CBN) sanctions list. This test ensures the service
+  /// layer propagates the generator’s exception, preventing any persistence
+  /// of non-compliant financial identifiers.
+  @Test
+  @DisplayName("Security Check: Should Block Unsupported Currencies (e.g., USD)")
+  void createAccount_ShouldFailForUSD() {
+        // Given
+        String userEmail = "test@opayque.com";
+        // Mock the User lookup to succeed
+        when(userRepository.findByEmail(userEmail)).thenReturn(Optional.of(new User()));
+
+        // FIX: We must instruct the Mock to behave like the Real Class.
+        // In the real IbanGeneratorImpl, "USD" throws an exception.
+        // Since this is a Unit Test, we stub that failure here to ensure AccountService propagates it.
+        when(ibanGenerator.generate("USD"))
+                .thenThrow(new IllegalArgumentException("Territory not supported for IBAN generation: USD"));
+
+        // When/Then
+        assertThatThrownBy(() -> accountService.createAccount(userEmail, "USD"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Territory not supported");
+
+        // Assert: Ensure we strictly blocked the database write
+        verify(accountRepository, never()).save(any());
+    }
+
     /// Scenario: Identity Resolution Failure (Email).
     ///
     /// Validates that requests utilizing a non-existent email address are

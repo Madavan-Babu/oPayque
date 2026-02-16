@@ -1,10 +1,13 @@
 package com.opayque.api.identity.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opayque.api.card.repository.VirtualCardRepository;
 import com.opayque.api.identity.dto.LoginRequest;
 import com.opayque.api.identity.entity.Role;
 import com.opayque.api.identity.entity.User;
+import com.opayque.api.identity.repository.RefreshTokenRepository;
 import com.opayque.api.identity.repository.UserRepository;
+import com.opayque.api.wallet.repository.AccountRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -40,12 +43,30 @@ class AuthLoginIntegrationTest {
     @Autowired private UserRepository userRepository;
     @Autowired private PasswordEncoder passwordEncoder;
 
+    // Repositories for Cleanup
+    @Autowired private RefreshTokenRepository refreshTokenRepository;
+    @Autowired private AccountRepository accountRepository;
+    @Autowired private VirtualCardRepository virtualCardRepository;
+
     /// Clears the identity ledger and seeds a fresh test user before each test case.
     ///
     /// This ensures environment isolation and a "Reliability-First" baseline for
     /// every integration attempt.
     @BeforeEach
     void setUp() {
+        // --- THE NUCLEAR CLEANUP ---
+        // We must delete it strictly from "Leaf" to "Root" to avoid FK constraints.
+
+        // 1. Delete Cards (Depends on Account)
+        virtualCardRepository.deleteAll();
+
+        // 2. Delete Accounts (Depends on User)
+        accountRepository.deleteAll();
+
+        // 3. Delete Refresh Tokens (Depends on User)
+        refreshTokenRepository.deleteAll();
+
+        // 4. NOW it is safe to delete Users
         userRepository.deleteAll();
 
         // Seed an authentic identity with a BCrypt-hashed password

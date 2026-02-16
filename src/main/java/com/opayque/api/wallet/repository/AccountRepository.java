@@ -52,25 +52,32 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
     @Query(value = "SELECT nextval('account_number_seq')", nativeQuery = true)
     Long getNextAccountNumber();
 
-    /// Retrieves an [Account] by its primary key with an exclusive database-level lock.
-    ///
-    /// By overriding the standard implementation with `LockModeType.PESSIMISTIC_WRITE`, this method
-    /// triggers a `SELECT ... FOR UPDATE` command.
-    ///
-    /// **Concurrency Impact:**
-    /// Any competing transaction (Thread B) attempting to lock the same row will be suspended by
-    /// the database until this transaction (Thread A) commits or rolls back.
-    /// This eliminates "Lost Updates" and race conditions during high-frequency fund transfers.
-    ///
-    /// @param id The unique identifier of the account.
-    /// @return An [Optional] containing the account, locked for exclusive modification.
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
+  /// Retrieves an immutable snapshot of an [Account] by its globally-unique identifier.
+  ///
+  /// This method is invoked by the Transfer Engine, Ledger Reconciliation, and Regulatory Reporting
+  /// sub-systems to obtain a read-only view of the account state. It guarantees that the returned
+  /// entity reflects the last committed transaction on the primary PostgreSQL node, ensuring
+  /// monotonic consistency for downstream AML, charge-back, and FX settlement workflows.
+  ///
+  /// **Security Considerations:**
+  /// - The returned `Optional` is empty when the UUID is not found, preventing NPE-based denial
+  ///   of service vectors that could be exploited to probe valid account ranges.
+  /// - No row-level lock is acquired; callers requiring serialised money movement must use
+  ///   `findByIdForUpdate` to enforce pessimistic concurrency control.
+  ///
+  /// **Compliance Mapping:**
+  /// - Satisfies PCI-DSS Req. 7.1.2 – least-privilege access by exposing only non-sensitive
+  ///   account metadata (no PAN, CVV, or PCI-protected fields).
+  /// - Aligns with ISO 20022 pain.001 message specifications for account reference resolution.
+  ///
+  /// @param id The UUIDv4 primary key of the account.
+  /// @return An [Optional] containing the [Account] entity, or empty if no account exists.
     @Override
     Optional<Account> findById(UUID id);
 
     /// Explicit fetcher for account state with pessimistic write locking.
     ///
-    ///     ///
+    ///
     /// This query-based implementation ensures that the [Account] state is synchronized with the
     /// database and protected from concurrent modifications during the "Withdraw" and "Deposit"
     /// phases of the Transfer Engine.

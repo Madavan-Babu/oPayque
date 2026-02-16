@@ -1,7 +1,7 @@
 package com.opayque.api.infrastructure.idempotency;
 
 import com.opayque.api.infrastructure.exception.IdempotencyException;
-import com.opayque.api.infrastructure.exception.ServiceUnavailableException; // Ensure this import exists
+import com.opayque.api.infrastructure.exception.ServiceUnavailableException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.QueryTimeoutException;
@@ -10,7 +10,6 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-
 
 /**
  * Idempotency Service — Distributed Lock & Replay-Protection Layer.
@@ -45,89 +44,63 @@ public class IdempotencyService {
     private static final String KEY_PREFIX = "idempotency:";
     private static final Duration TTL = Duration.ofHours(24);
 
+    // Thread-Local Cache for Transactional Re-entrancy (Compatible with @Retryable)
+    private final ThreadLocal<String> localLock = new ThreadLocal<>();
+
     /**
-     * Acquires a cluster-wide, time-bounded lock for the supplied idempotency key.
+     * ATOMIC LOCK: Tries to set the key to "PENDING".
      * <p>
-     * <b>Pre-conditions:</b>
-     * <ul>
-     *   <li>Key must be a non-null UUIDv4 (or hash thereof) generated client-side.</li>
-     *   <li>Key must be unique per payment intent; re-use constitutes a replay attack.</li>
-     * </ul>
-     * <p>
-     * <b>Behaviour:</b>
-     * <ul>
-     *   <li>Returns {@code true} immediately if the key is <i>free</i>.</li>
-     *   <li>Throws {@link IdempotencyException} with a human-readable message when
-     *       the key is <i>locked</i> or <i>completed</i>, allowing callers to
-     *       surface contextual error details to API consumers.</li>
-     *   <li>Throws {@link ServiceUnavailableException} when Redis is unreachable,
-     *       ensuring the caller fails fast and preserves data integrity.</li>
-     * </ul>
-     * <p>
-     * <b>Retention Policy:</b> Keys auto-expire after 24 h to satisfy
-     * <i>End-of-Day</i> reconciliation windows without exhausting memory.
-     *
-     * @param key client-generated idempotency token
-     * @return {@code true} when the lock is successfully acquired
-     * @throws IllegalArgumentException if key is {@code null}
-     * @throws IdempotencyException     when a duplicate request is detected
-     * @throws ServiceUnavailableException when Redis is not accessible
+     * <b>Re-entrancy Logic:</b> If the <i>current thread</i> already holds the lock
+     * for this specific key (e.g., during a DB transaction retry), this method
+     * returns immediately to prevent self-deadlock.
      */
-    public boolean lock(String key) {
-        if (key == null) {
-            throw new IllegalArgumentException("Idempotency key cannot be null");
+    public void check(String key) {
+        if (key == null) throw new IllegalArgumentException("Idempotency key cannot be null");
+
+        // FIX 2: Self-Healing Cleanup (Pool Protection)
+        // If this thread is being reused for a DIFFERENT request, clear the stale lock.
+        String currentOwnedKey = localLock.get();
+        if (currentOwnedKey != null && !currentOwnedKey.equals(key)) {
+            localLock.remove();
+            currentOwnedKey = null;
+        }
+
+        // FIX 3: Re-entrancy Check (The Retry Bypass)
+        // If we already own THIS key, let it pass.
+        if (key.equals(currentOwnedKey)) {
+            return;
         }
 
         String redisKey = KEY_PREFIX + key;
 
         try {
-            // 1. The Atomic "Check-Then-Set" (Your Existing Logic)
-            Boolean acquired = redisTemplate.opsForValue()
-                    .setIfAbsent(redisKey, "PENDING", TTL);
+            // SETNX: Only sets if the key is NOT present.
+            Boolean acquired = redisTemplate.opsForValue().setIfAbsent(redisKey, "PENDING", TTL);
 
             if (Boolean.TRUE.equals(acquired)) {
+                // FIX 4: Mark ownership for this thread
+                localLock.set(key);
                 log.debug("Idempotency Lock Acquired: [{}]", key);
-                return true;
-            }
-
-            // 2. Collision Detected - Enrich the Error (Your Existing Logic)
-            String existingValue = redisTemplate.opsForValue().get(redisKey);
-            String message;
-
-            if ("PENDING".equals(existingValue)) {
-                message = String.format("Duplicate request. Request [%s] is currently being processed.", key);
             } else {
-                message = String.format("Duplicate request. Transaction [%s] already processed for key [%s].", existingValue, key);
-            }
+                // Collision Logic
+                String existingValue = redisTemplate.opsForValue().get(redisKey);
 
-            log.warn("Idempotency Collision: {}", message);
-            throw new IdempotencyException(message);
+                if ("PENDING".equals(existingValue)) {
+                    throw new IdempotencyException("Duplicate request. Processing is already in progress.");
+                } else {
+                    // We include the existingValue (Transaction ID) for better visibility
+                    throw new IdempotencyException("Duplicate request. Already processed with TxId: " + existingValue);
+                }
+            }
 
         } catch (RedisConnectionFailureException | QueryTimeoutException e) {
-            // 3. HELLPROOF FIX: Fail Closed
-            // If Redis is unreachable, we MUST abort. We cannot guarantee uniqueness without the lock.
-            log.error("CRITICAL: Idempotency Lock Service (Redis) unreachable. Aborting transaction {}", key, e);
-            throw new ServiceUnavailableException("Transaction service temporarily unavailable. Please try again.");
+            log.error("CRITICAL: Redis unreachable. Aborting Idempotency Check for [{}]", key, e);
+            throw new ServiceUnavailableException("Service temporarily unavailable.");
         }
     }
 
     /**
-     * Promotes an idempotency key from <i>PENDING</i> to <i>COMPLETED</i> state
-     * by associating it with the immutable <i>Transaction ID</i> generated by the
-     * ledger subsystem.
-     * <p>
-     * <b>Usage:</b> Invoke this method after the downstream payment rail
-     * (ACH, SEPA, FAST, etc.) acknowledges <i>Settlement Finality</i>.
-     * <p>
-     * <b>Idempotency:</b> This operation is idempotent; repeated calls with the
-     * same arguments are safe and will not extend the TTL.
-     * <p>
-     * <b>Failure Handling:</b> Non-fatal. A best-effort warning is logged if Redis
-     * is unavailable; the key will eventually expire via TTL, preventing
-     * indefinite memory growth.
-     *
-     * @param key          the original idempotency token supplied by the caller
-     * @param transactionId the immutable transaction identifier returned by the ledger
+     * Promotes key to COMPLETED and clears local re-entrancy context.
      */
     public void complete(String key, String transactionId) {
         String redisKey = KEY_PREFIX + key;
@@ -135,8 +108,35 @@ public class IdempotencyService {
             redisTemplate.opsForValue().set(redisKey, transactionId, TTL);
             log.debug("Idempotency Completed: Key=[{}] -> Tx=[{}]", key, transactionId);
         } catch (Exception e) {
-            // Non-critical: If we fail to update status to COMPLETED, the TTL will eventually expire.
             log.warn("Failed to update idempotency status for key [{}]", key, e);
+        } finally {
+            // FIX 5: Strict Cleanup
+            // Always clear the local context on completion to prevent memory leaks.
+            localLock.remove();
+        }
+    }
+
+    /**
+     * Safe delegation: Maintains the boolean return contract while
+     * inheriting the new ThreadLocal re-entrancy logic.
+     * <p>
+     * Includes contextual logging to distinguish between active collisions
+     * and completed transaction replays.
+     */
+    public boolean lock(String key) {
+        try {
+            check(key); // Re-uses the re-entrancy logic
+            return true;
+        } catch (IdempotencyException e) {
+            // Collision detected - Log the specific reason before returning false
+            log.warn("Idempotency lock rejected for key [{}]: {}", key, e.getMessage());
+            return false;
+        } catch (ServiceUnavailableException e) {
+            // Infrastructure failure - Already logged in check(), but re-throwing is mandatory
+            throw e;
+        } catch (Exception e) {
+            log.error("Unexpected failure during idempotency lock acquisition for key [{}]", key, e);
+            throw e;
         }
     }
 }

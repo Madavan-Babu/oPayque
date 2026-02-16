@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260210-001-harden-card-schema" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="virtual_cards"/>
+            <not>
+                <columnExists tableName="virtual_cards" columnName="pan_fingerprint"/>
+            </not>
+        </preConditions>
+
+        <comment>Story 4.1 V2: Fortress Upgrade. Widening columns for AES-GCM and adding Blind Index.</comment>
+
+        <modifyDataType tableName="virtual_cards" columnName="expiry_date" newDataType="VARCHAR(255)"/>
+
+        <addColumn tableName="virtual_cards">
+            <column name="pan_fingerprint" type="VARCHAR(64)">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <addUniqueConstraint tableName="virtual_cards"
+                             columnNames="pan_fingerprint"
+                             constraintName="uk_virtual_card_pan_fingerprint"/>
+    </changeSet>
+
+</databaseChangeLog>

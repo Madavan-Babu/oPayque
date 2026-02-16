@@ -166,6 +166,16 @@ public class AccountService {
                 });
     }
 
+    /**
+     * Acquire a pessimistic write lock on the account.
+     * Used exclusively for sensitive ledger operations (Transfers/Withdrawals).
+     */
+    @Transactional // Must NOT be readOnly = true
+    public Account getAccountForUpdate(UUID accountId) {
+        return accountRepository.findByIdForUpdate(accountId)
+                .orElseThrow(() -> new IllegalArgumentException("Account not found: " + accountId));
+    }
+
     /// Resolves the specific Wallet ID for a user based on their email and target currency.
     ///
     /// This is a critical Security/BOLA check. It ensures that the authenticated user

@@ -4,6 +4,7 @@ import com.opayque.api.infrastructure.dto.ErrorResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authorization.AuthorizationDeniedException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.HashMap;
@@ -218,6 +220,57 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(
                 HttpStatus.SERVICE_UNAVAILABLE,
                 "SERVICE_UNAVAILABLE",
+                ex.getMessage(),
+                request
+        );
+    }
+
+    /**
+     * Handles Type Mismatch Errors (e.g., passing "bad-uuid" to a UUID field).
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex, WebRequest request) {
+        String name = ex.getName();
+        String type = ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "unknown";
+        Object value = ex.getValue();
+        String message = String.format("The parameter '%s' should be of type '%s'. Value '%s' is invalid.",
+                name, type, value);
+
+        return buildErrorResponse(
+                HttpStatus.BAD_REQUEST,
+                "INVALID_PARAMETER_TYPE",
+                message,
+                request
+        );
+    }
+
+    /// Handles malformed JSON or Enum Mismatches (e.g., sending "WOO" instead of "FROZEN").
+    ///
+    /// Without this, Enum errors would fall into the generic 500 handler, confusing the client.
+    /// This explicitly tells them their payload format is wrong.
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleMalformedJson(HttpMessageNotReadableException ex, WebRequest request) {
+        log.warn("Malformed JSON Request: {}", ex.getMessage());
+        return buildErrorResponse(
+                HttpStatus.BAD_REQUEST,
+                "MALFORMED_JSON",
+                "Invalid request payload. Please check your JSON syntax and Enum values.",
+                request
+        );
+    }
+
+
+    /// Handles violations of the Card Monthly Spend Limit (The "Redis Accumulator").
+    ///
+    /// @param ex The exception thrown when the projected spend exceeds the card's monthlyLimit.
+    /// @param request The web request context.
+    /// @return A 403 Forbidden response (Distinct from 402 Insufficient Funds).
+    @ExceptionHandler(CardLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleCardLimitExceeded(CardLimitExceededException ex, WebRequest request) {
+        log.warn("Card Limit Violation: {}", ex.getMessage());
+        return buildErrorResponse(
+                HttpStatus.FORBIDDEN,
+                "CARD_LIMIT_EXCEEDED",
                 ex.getMessage(),
                 request
         );

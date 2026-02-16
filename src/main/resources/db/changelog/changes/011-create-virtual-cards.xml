@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260209-001-create-virtual-cards" author="madavan">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="virtual_cards"/>
+            </not>
+            <tableExists tableName="accounts"/>
+        </preConditions>
+
+        <comment>Story 4.1: Secure Vault. Creating virtual_cards table with encrypted columns.</comment>
+
+        <createTable tableName="virtual_cards">
+            <column name="id" type="UUID">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+
+            <column name="account_id" type="UUID">
+                <constraints nullable="false"
+                             foreignKeyName="fk_virtual_cards_account"
+                             references="accounts(id)"/>
+            </column>
+
+            <column name="pan" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="cvv" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="expiry_date" type="VARCHAR(5)">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="status" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="cardholder_name" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="monthly_limit" type="DECIMAL(19, 2)">
+                <constraints nullable="true"/>
+            </column>
+
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP"/>
+        </createTable>
+
+        <createIndex tableName="virtual_cards" indexName="idx_virtual_cards_account">
+            <column name="account_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

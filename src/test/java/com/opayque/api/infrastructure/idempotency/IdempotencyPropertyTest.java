@@ -9,6 +9,8 @@ import org.springframework.data.redis.core.ValueOperations;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -104,21 +106,44 @@ class IdempotencyPropertyTest {
      * 
      * @param key a randomly generated string from the chaosKeys generator
      */
-    @Property(tries = 100)
-    void lockingSameKeyTwiceMustAlwaysResultInConflict(@ForAll("chaosKeys") String key) {
-        // Step 1: First Access -> Must Succeed
-        boolean firstAttempt = idempotencyService.lock(key);
-        assertThat(firstAttempt).as("First lock attempt should succeed").isTrue();
+    @Property(tries = 50)
+    void crossThreadAccessMustResultInConflict(@ForAll("chaosKeys") String key) throws Exception {
+        // 1. Thread A locks the key
+        boolean threadA = idempotencyService.lock(key);
+        assertThat(threadA).isTrue();
 
-        // Verify Internal State
-        assertThat(redisStub).containsKey("idempotency:" + key);
-        assertThat(redisStub.get("idempotency:" + key)).isEqualTo("PENDING");
+        // 2. Thread B tries to check the same key
+        // We run this in a different thread to trigger the Redis collision
+        CompletableFuture<Throwable> threadBResult = CompletableFuture.supplyAsync(() -> {
+            try {
+                idempotencyService.check(key);
+                return null;
+            } catch (Throwable t) {
+                return t;
+            }
+        });
 
-        // Step 2: Second Access -> Must Fail (Idempotency Check)
-        assertThatThrownBy(() -> idempotencyService.lock(key))
-                .as("Second lock attempt must throw IdempotencyException")
+        Throwable failure = threadBResult.get(5, TimeUnit.SECONDS);
+
+        // 3. Verify Thread B was blocked
+        assertThat(failure)
+                .as("A different thread must be blocked by the idempotency lock")
                 .isInstanceOf(IdempotencyException.class)
-                .hasMessageContaining("currently being processed");
+                .hasMessageContaining("Processing is already in progress");
+    }
+
+    @Property(tries = 100)
+    void reentrancyMustAllowSameThreadToRelock(@ForAll("chaosKeys") String key) {
+        // 1. First Access -> Succeeds
+        boolean firstAttempt = idempotencyService.lock(key);
+        assertThat(firstAttempt).isTrue();
+
+        // 2. Second Access (Same Thread) -> MUST succeed now (Fix 3: Re-entrancy)
+        boolean secondAttempt = idempotencyService.lock(key);
+
+        assertThat(secondAttempt)
+                .as("Re-entrancy logic should allow the same thread to re-acquire its own lock")
+                .isTrue();
     }
 
     /**
@@ -179,9 +204,10 @@ class IdempotencyPropertyTest {
         assertThat(redisStub.get("idempotency:" + key)).isEqualTo(txId);
 
         // Verify: Subsequent lock attempt gives the "Premium" error with the ID
-        assertThatThrownBy(() -> idempotencyService.lock(key))
+        assertThatThrownBy(() -> idempotencyService.check(key))
                 .isInstanceOf(IdempotencyException.class)
-                .hasMessageContaining(txId);
+                .hasMessageContaining(txId)
+                .hasMessageContaining("Already processed");
     }
 
     /**
