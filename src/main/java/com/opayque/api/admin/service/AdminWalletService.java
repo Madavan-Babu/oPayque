@@ -1,5 +1,6 @@
 package com.opayque.api.admin.service;
 
+import com.opayque.api.admin.controller.AdminWalletController;
 import com.opayque.api.admin.dto.MoneyDepositRequest;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
@@ -20,6 +21,33 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+/**
+ * Service layer that provides privileged administrative operations on user wallets.
+ * <p>
+ * The {@code AdminWalletService} aggregates core domain services
+ * {@link AccountService}, {@link LedgerService} and auxiliary infrastructure
+ * {@link RateLimiterService} to enforce strict governance when an administrator
+ * modifies account status or injects funds.  It resolves the administrator’s
+ * identity via {@link UserRepository} and records all actions with audit‑level
+ * logging, thereby supporting regulatory compliance and operational traceability.
+ * <p>
+ * Typical use‑cases include:
+ * <ul>
+ *   <li>Changing the {@link AccountStatus} of any account under a
+ *       supervision context.</li>
+ *   <li>Performing a “top‑up” (deposit) into a wallet while applying rate limiting,
+ *       currency conversion, and immutable ledger entry creation.</li>
+ * </ul>
+ *
+ * @author Madavan Babu
+ * @since 2026
+ *
+ * @see {@link AdminWalletController}
+ * @see {@link AccountService}
+ * @see {@link LedgerService}
+ * @see {@link RateLimiterService}
+ * @see {@link UserRepository}
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -31,7 +59,32 @@ public class AdminWalletService {
     private final LedgerService ledgerService;
 
     /**
-     * Orchestrates the account status update with strict governance checks.
+     * Updates the {@link AccountStatus} of a target {@link Account} under administrative authority.
+     * <p>
+     * The method performs three core steps:
+     * <ul>
+     *   <li>Resolves the admin identity from {@code adminEmail} using {@link UserRepository};
+     *       an {@link AccessDeniedException} is thrown if the admin cannot be located.</li>
+     *   <li>Applies a rate‑limit check via {@link RateLimiterService} to protect against
+     *       excessive admin actions (max 10 calls per defined window).</li>
+     *   <li>Delegates the actual status transition to {@link AccountService#updateAccountStatus(UUID, AccountStatus, boolean)},
+     *       ensuring domain rules (e.g., {@link AccountStatus#canTransitionTo(AccountStatus)}) are enforced.</li>
+     * </ul>
+     * <p>
+     * This orchestrated approach centralises audit logging, governance, and domain validation,
+     * thereby preserving integrity of account state changes across the system.
+     *
+     * @param adminEmail       the email address of the administrator initiating the request;
+     *                         used to locate the {@link User} performing the operation.
+     * @param targetAccountId  the unique identifier of the {@link Account} whose status is to be changed.
+     * @param newStatus        the desired {@link AccountStatus} to apply to the target account.
+     *
+     * @return the updated {@link Account} instance reflecting the new status.
+     *
+     * @see AdminWalletController
+     * @see AccountService
+     * @see RateLimiterService
+     * @see UserRepository
      */
     @Transactional
     public Account updateAccountStatus(String adminEmail, UUID targetAccountId, AccountStatus newStatus) {
