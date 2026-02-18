@@ -104,7 +104,7 @@ public class SecurityConfig {
 
                         // User Profiles & Admin
                         .requestMatchers("/api/v1/users/**").authenticated()
-                        .requestMatchers("/api/v1/admin/**").authenticated()
+                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/demo/**").authenticated()
 
                         // =====================================================================

@@ -5,6 +5,7 @@ import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.infrastructure.exception.InsufficientFundsException;
 import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.entity.LedgerEntry;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.repository.AccountRepository;
@@ -213,6 +214,100 @@ class TransferIntegrationTest {
         List<LedgerEntry> entries = ledgerRepository.findByAccount(senderAccount);
         assertThat(entries).hasSize(1);
         assertThat(entries.get(0).getDescription()).isEqualTo("Seed Funds");
+    }
+
+    // =========================================================================
+    // EPIC 5: ACCOUNT STATUS GUARDRAIL TESTS (INTEGRATION)
+    // =========================================================================
+
+    /**
+     * Integration Scenario: The "Kill-Switch" Block.
+     * <p>
+     * Verifies that funds cannot leave a FROZEN account.
+     * 1. Setup: Sender has 100 EUR. Receiver has 0 EUR.
+     * 2. Action: Admin freezes Sender.
+     * 3. Trigger: Transfer attempt.
+     * 4. Expectation: IllegalStateException (FROZEN). Ledger remains unchanged.
+     */
+    @Test
+    @DisplayName("Integration: Should REJECT transfer if Sender is FROZEN")
+    void shouldRejectTransfer_WhenSenderIsFrozen() {
+        // 1. Arrange
+        User senderUser = createUser("frozen_sender@opayque.com", "Sender Frozen");
+        User receiverUser = createUser("lucky_receiver@opayque.com", "Receiver Active");
+
+        Account senderWallet = createAccount(senderUser, "EUR");
+        Account receiverWallet = createAccount(receiverUser, "EUR");
+
+        // Seed funds (100.00) so InsufficientFunds isn't the blocker
+        seedFunds(senderWallet, new BigDecimal("100.00"));
+
+        // THE TRAP: Freeze the sender
+        senderWallet.setStatus(AccountStatus.FROZEN);
+        accountRepository.saveAndFlush(senderWallet);
+
+        // 2. Act & Assert
+        assertThatThrownBy(() -> transferService.transferFunds(
+                senderWallet.getId(),
+                receiverUser.getEmail(),
+                "50.00",
+                "EUR",
+                "idemp-frozen-1"
+        ))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("FROZEN");
+
+        // 3. Verification (Critical)
+        // Ensure no money moved. Sender should still have original seed credit only.
+        List<LedgerEntry> senderEntries = ledgerRepository.findAll().stream()
+                .filter(l -> l.getAccount().getId().equals(senderWallet.getId()))
+                .toList();
+
+        // Should only have the 1 seed transaction
+        assertThat(senderEntries).hasSize(1);
+        assertThat(senderEntries.get(0).getDescription()).isEqualTo("Seed Funds");
+    }
+
+    /**
+     * Integration Scenario: The "Soft Delete" Block.
+     * <p>
+     * Verifies that funds cannot leave a CLOSED account.
+     * This prevents "Zombie Transfers" from accounts that are technically dead.
+     */
+    @Test
+    @DisplayName("Integration: Should REJECT transfer if Sender is CLOSED")
+    void shouldRejectTransfer_WhenSenderIsClosed() {
+        // 1. Arrange
+        User senderUser = createUser("closed_sender@opayque.com", "Sender Closed");
+        User receiverUser = createUser("active_receiver@opayque.com", "Receiver Active");
+
+        Account senderWallet = createAccount(senderUser, "GBP");
+        Account receiverWallet = createAccount(receiverUser, "GBP");
+
+        seedFunds(senderWallet, new BigDecimal("500.00"));
+
+        // THE TRAP: Close the sender
+        senderWallet.setStatus(AccountStatus.CLOSED);
+        accountRepository.saveAndFlush(senderWallet);
+
+        // 2. Act & Assert
+        assertThatThrownBy(() -> transferService.transferFunds(
+                senderWallet.getId(),
+                receiverUser.getEmail(),
+                "100.00",
+                "GBP",
+                "idemp-closed-1"
+        ))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("CLOSED");
+
+        // 3. Verification
+        // Receiver should have 0 transactions
+        List<LedgerEntry> receiverEntries = ledgerRepository.findAll().stream()
+                .filter(l -> l.getAccount().getId().equals(receiverWallet.getId()))
+                .toList();
+
+        assertThat(receiverEntries).isEmpty();
     }
 
     // --- HELPERS ---

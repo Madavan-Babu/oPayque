@@ -12,6 +12,7 @@ import com.opayque.api.infrastructure.exception.IdempotencyException;
 import com.opayque.api.infrastructure.idempotency.IdempotencyService;
 import com.opayque.api.infrastructure.ratelimit.RateLimiterService;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.service.LedgerService;
 import lombok.RequiredArgsConstructor;
@@ -133,6 +134,13 @@ public class CardTransactionService {
                         log.warn("Card Not Found (Invalid PAN) | ExtID: {}", request.getExternalTransactionId());
                         return new BadCredentialsException("Invalid PAN or Card not found");
                     });
+
+            // NEW GUARDRAIL (NEW EPIC 5)
+            if (card.getAccount().getStatus() != AccountStatus.ACTIVE) {
+                log.warn("Card Transaction Rejected: Underlying Account is {} | CardID: {}",
+                        card.getAccount().getStatus(), card.getId());
+                throw new AccessDeniedException("Linked account is " + card.getAccount().getStatus());
+            }
 
             cardId = card.getId(); // FIX: Capture ID for potential rollback
 

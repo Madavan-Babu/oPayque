@@ -3,6 +3,7 @@ package com.opayque.api.wallet.service;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.repository.AccountRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.access.AccessDeniedException;
 
 import java.util.List;
 import java.util.Optional;
@@ -300,4 +302,241 @@ class AccountServiceTest {
                 .hasMessage("No " + requestedCurrency + " wallet found for user");
     }
 
+    // =========================================================================
+    // EPIC 5: LIFECYCLE MANAGEMENT TESTS
+    // =========================================================================
+
+    @Test
+    @DisplayName("UpdateStatus: Should throw exception when account does not exist")
+    void updateStatus_AccountNotFound() {
+        // Given
+        UUID randomId = UUID.randomUUID();
+        when(accountRepository.findById(randomId)).thenReturn(Optional.empty());
+
+        // When & Then
+        assertThatThrownBy(() -> accountService.updateAccountStatus(randomId, AccountStatus.FROZEN, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Account not found");
+
+        verify(accountRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("UpdateStatus: Should throw exception for illegal state transition (CLOSED -> ACTIVE)")
+    void updateStatus_IllegalTransition() {
+        // Given
+        UUID accountId = UUID.randomUUID();
+        Account closedAccount = Account.builder()
+                .id(accountId)
+                .status(AccountStatus.CLOSED) // Terminal state
+                .build();
+
+        when(accountRepository.findById(accountId)).thenReturn(Optional.of(closedAccount));
+
+        // When & Then
+        assertThatThrownBy(() -> accountService.updateAccountStatus(accountId, AccountStatus.ACTIVE, true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot transition");
+
+        verify(accountRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Security: Non-Admin CANNOT freeze an account")
+    void updateStatus_UserCannotFreeze() {
+        // Given
+        UUID accountId = UUID.randomUUID();
+        Account activeAccount = Account.builder().id(accountId).status(AccountStatus.ACTIVE).build();
+
+        when(accountRepository.findById(accountId)).thenReturn(Optional.of(activeAccount));
+
+        // When & Then
+        assertThatThrownBy(() -> accountService.updateAccountStatus(accountId, AccountStatus.FROZEN, false)) // isAdmin = false
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("Only Administrators can freeze accounts.");
+
+        verify(accountRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Security: Non-Admin CANNOT unfreeze a frozen account")
+    void updateStatus_UserCannotUnfreeze() {
+        // Given
+        UUID accountId = UUID.randomUUID();
+        Account frozenAccount = Account.builder().id(accountId).status(AccountStatus.FROZEN).build();
+
+        when(accountRepository.findById(accountId)).thenReturn(Optional.of(frozenAccount));
+
+        // When & Then
+        assertThatThrownBy(() -> accountService.updateAccountStatus(accountId, AccountStatus.ACTIVE, false)) // isAdmin = false
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("Only Administrators can unfreeze accounts.");
+
+        verify(accountRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Admin: Should successfully FREEZE an active account")
+    void updateStatus_AdminCanFreeze() {
+        // Given
+        UUID accountId = UUID.randomUUID();
+        Account activeAccount = Account.builder().id(accountId).status(AccountStatus.ACTIVE).build();
+
+        when(accountRepository.findById(accountId)).thenReturn(Optional.of(activeAccount));
+        when(accountRepository.save(any(Account.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // When
+        Account updated = accountService.updateAccountStatus(accountId, AccountStatus.FROZEN, true); // isAdmin = true
+
+        // Then
+        assertThat(updated.getStatus()).isEqualTo(AccountStatus.FROZEN);
+        verify(accountRepository).save(activeAccount);
+    }
+
+    @Test
+    @DisplayName("Admin: Should successfully UNFREEZE a frozen account")
+    void updateStatus_AdminCanUnfreeze() {
+        // Given
+        UUID accountId = UUID.randomUUID();
+        Account frozenAccount = Account.builder().id(accountId).status(AccountStatus.FROZEN).build();
+
+        when(accountRepository.findById(accountId)).thenReturn(Optional.of(frozenAccount));
+        when(accountRepository.save(any(Account.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // When
+        Account updated = accountService.updateAccountStatus(accountId, AccountStatus.ACTIVE, true); // isAdmin = true
+
+        // Then
+        assertThat(updated.getStatus()).isEqualTo(AccountStatus.ACTIVE);
+        verify(accountRepository).save(frozenAccount);
+    }
+
+    @Test
+    @DisplayName("User: Should successfully CLOSE their own account (Soft Delete)")
+    void updateStatus_UserCanCloseAccount() {
+        // Given
+        UUID accountId = UUID.randomUUID();
+        Account activeAccount = Account.builder().id(accountId).status(AccountStatus.ACTIVE).build();
+
+        when(accountRepository.findById(accountId)).thenReturn(Optional.of(activeAccount));
+        when(accountRepository.save(any(Account.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // When
+        // isAdmin = false (User action), Target = CLOSED
+        Account updated = accountService.updateAccountStatus(accountId, AccountStatus.CLOSED, false);
+
+        // Then
+        assertThat(updated.getStatus()).isEqualTo(AccountStatus.CLOSED);
+        verify(accountRepository).save(activeAccount);
+    }
+
+    @Test
+    @DisplayName("UpdateStatus: Should throw AccessDenied when non-admin tries to unfreeze (ACTIVE) a FROZEN account")
+    void updateAccountStatus_WhenNonAdminUnfreezes_ShouldThrowAccessDeniedException() {
+        // Arrange
+        UUID accountId = UUID.randomUUID();
+        // Step 1: Account is currently FROZEN
+        Account frozenAccount = Account.builder()
+                .id(accountId)
+                .status(AccountStatus.FROZEN)
+                .build();
+
+        when(accountRepository.findById(accountId)).thenReturn(Optional.of(frozenAccount));
+
+        // Act & Assert
+        // Step 2: Attempting to set to ACTIVE with isAdmin = false
+        assertThatThrownBy(() ->
+                accountService.updateAccountStatus(accountId, AccountStatus.ACTIVE, false)
+        )
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("Only Administrators can unfreeze accounts.");
+
+        // Verify no save was attempted
+        verify(accountRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("UpdateStatus: Should succeed when ADMIN unfreezes (ACTIVE) a FROZEN account")
+    void updateAccountStatus_WhenAdminUnfreezes_ShouldSucceed() {
+        // Arrange
+        UUID accountId = UUID.randomUUID();
+        Account frozenAccount = Account.builder()
+                .id(accountId)
+                .status(AccountStatus.FROZEN)
+                .build();
+
+        when(accountRepository.findById(accountId)).thenReturn(Optional.of(frozenAccount));
+        when(accountRepository.save(any(Account.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Act
+        // Step 2: Attempting to set to ACTIVE with isAdmin = true
+        Account result = accountService.updateAccountStatus(accountId, AccountStatus.ACTIVE, true);
+
+        // Assert
+        assertThat(result.getStatus()).isEqualTo(AccountStatus.ACTIVE);
+        verify(accountRepository).save(frozenAccount);
+    }
+
+
+    @Test
+    @DisplayName("Rule B Coverage: Condition 1 False - Current status is NOT Frozen")
+    void updateAccountStatus_RuleB_Branch1_NotFrozen() {
+        UUID id = UUID.randomUUID();
+        // Setup: Status is ACTIVE (Not FROZEN)
+        Account account = Account.builder().id(id).status(AccountStatus.ACTIVE).build();
+
+        when(accountRepository.findById(id)).thenReturn(Optional.of(account));
+        when(accountRepository.save(any())).thenReturn(account);
+
+        // Act: Transition to CLOSED (Condition 1 of Rule B fails immediately)
+        accountService.updateAccountStatus(id, AccountStatus.CLOSED, false);
+
+        // Verification: The line was executed, but the 'if' block was skipped because first check failed
+        verify(accountRepository).save(any());
+    }
+
+    @Test
+    @DisplayName("Rule B Coverage: Condition 2 False - Current is Frozen but target is NOT Active")
+    void updateAccountStatus_RuleB_Branch2_NotTransitioningToActive() {
+        UUID id = UUID.randomUUID();
+        // Setup: Status is FROZEN
+        Account account = Account.builder().id(id).status(AccountStatus.FROZEN).build();
+
+        when(accountRepository.findById(id)).thenReturn(Optional.of(account));
+        when(accountRepository.save(any())).thenReturn(account);
+
+        // Act: Transition to CLOSED (Condition 2 of Rule B fails: target is not ACTIVE)
+        accountService.updateAccountStatus(id, AccountStatus.CLOSED, true);
+
+        verify(accountRepository).save(any());
+    }
+
+    @Test
+    @DisplayName("Rule B Coverage: Condition 3 False - Admin is performing the unfreeze")
+    void updateAccountStatus_RuleB_Branch3_AdminBypass() {
+        UUID id = UUID.randomUUID();
+        Account account = Account.builder().id(id).status(AccountStatus.FROZEN).build();
+
+        when(accountRepository.findById(id)).thenReturn(Optional.of(account));
+        when(accountRepository.save(any())).thenReturn(account);
+
+        // Act: Transition to ACTIVE with isAdmin = true (Condition 3 of Rule B fails: !isAdmin is false)
+        accountService.updateAccountStatus(id, AccountStatus.ACTIVE, true);
+
+        verify(accountRepository).save(any());
+    }
+
+    @Test
+    @DisplayName("Rule B Coverage: Full True - Non-admin attempts to unfreeze (Exception Case)")
+    void updateAccountStatus_RuleB_Branch4_TriggerException() {
+        UUID id = UUID.randomUUID();
+        Account account = Account.builder().id(id).status(AccountStatus.FROZEN).build();
+
+        when(accountRepository.findById(id)).thenReturn(Optional.of(account));
+
+        // Act & Assert: All conditions met, exception thrown
+        assertThatThrownBy(() ->
+                accountService.updateAccountStatus(id, AccountStatus.ACTIVE, false)
+        ).isInstanceOf(AccessDeniedException.class);
+    }
 }

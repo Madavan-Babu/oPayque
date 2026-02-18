@@ -13,6 +13,7 @@ import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.infrastructure.encryption.AttributeEncryptor;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
 import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.repository.AccountRepository;
 import com.opayque.api.wallet.repository.LedgerRepository;
@@ -392,7 +393,7 @@ class CardTransactionIntegrationTest {
         // Issue Card for poor user using correct BIN
         String poorPan = opayqueBin + "999999999999";
 
-        VirtualCard poorCard = virtualCardRepository.saveAndFlush(VirtualCard.builder()
+        virtualCardRepository.saveAndFlush(VirtualCard.builder()
                 .account(poorWallet)
                 .pan(poorPan)
                 .cvv(attributeEncryptor.convertToDatabaseColumn("123"))
@@ -677,5 +678,82 @@ class CardTransactionIntegrationTest {
                 .count();
 
         assertThat(debitCount).as("Velocity limit breached! Ledger contains too many entries.").isEqualTo(20);
+    }
+
+    // =========================================================================
+    // EPIC 5: ACCOUNT STATUS GUARDRAIL TESTS (INTEGRATION)
+    // =========================================================================
+
+    @Test
+    @DisplayName("Integration: Should REJECT transaction if Account is FROZEN (Kill-Switch)")
+    void shouldRejectTransaction_WhenAccountIsFrozen() throws Exception {
+        // 1. Simulate Admin Action: Freeze the wallet
+        goldenWallet.setStatus(AccountStatus.FROZEN);
+        accountRepository.save(goldenWallet);
+
+        // 2. Capture Baseline (Likely 1 due to seed funds)
+        long initialLedgerCount = ledgerRepository.count();
+
+        // 3. Construct the Payload
+        CardTransactionRequest request = new CardTransactionRequest(
+                rawPan,
+                RAW_CVV,
+                RAW_EXPIRY,
+                new BigDecimal("50.00"),
+                "EUR",
+                "Suspicious Merchant",
+                "5999",
+                UUID.randomUUID().toString()
+        );
+
+        // 4. Execute & Verify HTTP Response
+        mockMvc.perform(post("/api/v1/simulation/card-transaction")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden()) // 403
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").value("Access Denied: You do not have permission to view this resource"));
+
+        // 5. Critical: Verify Ledger Integrity
+        // The count must be EXACTLY the same as before. No new debit added.
+        assertThat(ledgerRepository.count())
+                .as("Ledger count should remain unchanged (Money did not leave)")
+                .isEqualTo(initialLedgerCount);
+    }
+
+    @Test
+    @DisplayName("Integration: Should REJECT transaction if Account is CLOSED (Zombie Charge)")
+    void shouldRejectTransaction_WhenAccountIsClosed() throws Exception {
+        // 1. Simulate User Action: Close the wallet
+        goldenWallet.setStatus(AccountStatus.CLOSED);
+        accountRepository.save(goldenWallet);
+
+        // 2. Capture Baseline
+        long initialLedgerCount = ledgerRepository.count();
+
+        // 3. Construct the Payload
+        CardTransactionRequest request = new CardTransactionRequest(
+                rawPan,
+                RAW_CVV,
+                RAW_EXPIRY,
+                new BigDecimal("12.99"),
+                "EUR",
+                "Netflix Subscription",
+                "4899",
+                UUID.randomUUID().toString()
+        );
+
+        // 4. Execute & Verify HTTP Response
+        mockMvc.perform(post("/api/v1/simulation/card-transaction")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").value("Access Denied: You do not have permission to view this resource"));
+
+        // 5. Verify Ledger Integrity
+        assertThat(ledgerRepository.count())
+                .as("Ledger count should remain unchanged")
+                .isEqualTo(initialLedgerCount);
     }
 }

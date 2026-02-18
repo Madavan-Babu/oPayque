@@ -4,6 +4,7 @@ import com.opayque.api.infrastructure.exception.InsufficientFundsException;
 import com.opayque.api.infrastructure.idempotency.IdempotencyService;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
 import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.service.AccountService;
 import com.opayque.api.wallet.service.LedgerService;
@@ -88,6 +89,12 @@ public class TransferService {
 
             // Acquire pessimistic lock on sender wallet to serialize concurrent debits
             Account senderAccount = accountService.getAccountForUpdate(senderId); // Forces the lock
+
+            // NEW GUARDRAIL (EPIC 5)
+            if (senderAccount.getStatus() != AccountStatus.ACTIVE) {
+                log.warn("Transfer Rejected: Account [{}] is {}", senderId, senderAccount.getStatus());
+                throw new IllegalStateException("Account is currently " + senderAccount.getStatus());
+            }
 
             // Locate beneficiary wallet; reject if currency corridor unavailable
             List<Account> receiverAccounts = accountService.getAccountsForUser(receiverEmail);

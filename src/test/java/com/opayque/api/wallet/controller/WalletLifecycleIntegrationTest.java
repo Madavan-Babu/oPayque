@@ -6,6 +6,8 @@ import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.identity.service.JwtService;
 import com.opayque.api.wallet.dto.CreateAccountRequest;
+import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.repository.AccountRepository;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,7 +21,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.UUID;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -152,5 +157,105 @@ class WalletLifecycleIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest());
+    }
+
+    // =========================================================================
+    // EPIC 5: USER LIFECYCLE EXTENSION TESTS
+    // =========================================================================
+
+    /// Scenario: User closes their own wallet (Happy Path).
+    ///
+    /// Verifies that a user can initiate the "Soft Delete" of their account.
+    /// Expects 204 No Content and DB state to match CLOSED.
+    @Test
+    @DisplayName("Lifecycle: User should successfully CLOSE their own account")
+    void shouldCloseAccountSuccessfully() throws Exception {
+        // 1. Setup: Create an account first
+        CreateAccountRequest request = new CreateAccountRequest("EUR");
+        String responseJson = mockMvc.perform(post("/api/v1/accounts")
+                        .header("Authorization", validToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+
+        // Extract ID
+        String accountId = objectMapper.readTree(responseJson).get("id").asText();
+
+        // 2. Action: Close it
+        mockMvc.perform(delete("/api/v1/accounts/" + accountId)
+                        .header("Authorization", validToken))
+                .andExpect(status().isNoContent());
+
+        // 3. Verification: DB check
+        Account updated = accountRepository.findById(UUID.fromString(accountId)).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(AccountStatus.CLOSED);
+    }
+
+    /// Scenario: BOLA Protection on Closure.
+    ///
+    /// Verifies that a user cannot close someone else's wallet.
+    /// This is critical to prevent malicious users from griefing others.
+    @Test
+    @DisplayName("Security: User cannot CLOSE another user's account (BOLA)")
+    void shouldRejectClosingOthersAccount() throws Exception {
+        // 1. Setup: User A (Saver One) creates an account
+        CreateAccountRequest request = new CreateAccountRequest("CHF");
+        String responseJson = mockMvc.perform(post("/api/v1/accounts")
+                        .header("Authorization", validToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+
+        String accountId = objectMapper.readTree(responseJson).get("id").asText();
+
+        // 2. Setup: Create User B (Attacker)
+        User attacker = User.builder()
+                .email("hacker@opayque.com")
+                .password(passwordEncoder.encode("pass"))
+                .role(Role.CUSTOMER)
+                .fullName("Attacker")
+                .build();
+        userRepository.save(attacker);
+        String attackerToken = "Bearer " + jwtService.generateToken(attacker.getEmail(), "ROLE_CUSTOMER");
+
+        // 3. Action: Attacker tries to close User A's account
+        mockMvc.perform(delete("/api/v1/accounts/" + accountId)
+                        .header("Authorization", attackerToken))
+                .andExpect(status().isForbidden()); // AccessDeniedException -> 403
+
+        // 4. Verification: Account must remain ACTIVE
+        Account safeAccount = accountRepository.findById(UUID.fromString(accountId)).orElseThrow();
+        assertThat(safeAccount.getStatus()).isEqualTo(AccountStatus.ACTIVE);
+    }
+
+    /// Scenario: Double Close (Idempotency/State Machine).
+    ///
+    /// Verifies that closing an already CLOSED account fails gracefully.
+    /// The State Machine (canTransitionTo) should block the second attempt.
+    @Test
+    @DisplayName("Lifecycle: Cannot re-close an already CLOSED account")
+    void shouldRejectDoubleClose() throws Exception {
+        // 1. Setup: Create and Close
+        CreateAccountRequest request = new CreateAccountRequest("GBP");
+        String responseJson = mockMvc.perform(post("/api/v1/accounts")
+                        .header("Authorization", validToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+
+        String accountId = objectMapper.readTree(responseJson).get("id").asText();
+
+        // Close 1 (Success)
+        mockMvc.perform(delete("/api/v1/accounts/" + accountId)
+                        .header("Authorization", validToken))
+                .andExpect(status().isNoContent());
+
+        // Close 2 (Fail - State Machine Block)
+        mockMvc.perform(delete("/api/v1/accounts/" + accountId)
+                        .header("Authorization", validToken))
+                .andExpect(status().isConflict()); // IllegalStateException -> 409
     }
 }

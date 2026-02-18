@@ -16,6 +16,7 @@ import com.opayque.api.infrastructure.idempotency.IdempotencyService;
 import com.opayque.api.infrastructure.ratelimit.RateLimiterService;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
 import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.service.LedgerService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,8 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.UUID;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -773,5 +773,82 @@ class CardTransactionServiceTest {
 
         // VERIFY: limitReserved is false, so no rollback
         verify(cardLimitService, never()).rollbackSpend(any(), any());
+    }
+
+    // =========================================================================
+    // TEST 13: EPIC 5 - Account Status Guardrails
+    // =========================================================================
+
+    /**
+     * Validates that the transaction is rejected if the underlying {@link Account}
+     * is {@code FROZEN}, even if the {@link VirtualCard} itself is {@code ACTIVE}.
+     *
+     * <p>This ensures the "Admin Kill-Switch" works instantly. The service must
+     * check the account status <i>after</i> successfully identifying the card but
+     * <i>before</i> attempting any ledger movement.
+     *
+     * @see CardTransactionService
+     * @see AccountStatus#FROZEN
+     */
+    void processTransaction_WhenAccountFrozen_ShouldThrowAccessDenied() {
+        // Arrange
+        mockAccount.setStatus(AccountStatus.FROZEN);
+
+        // 1. Mock the Card Lookup
+        when(virtualCardRepository.findByPanFingerprint(HASHED_PAN)).thenReturn(Optional.of(mockCard));
+
+        // 2. Mock Security Gates (CVV/Expiry) to PASS
+        when(attributeEncryptor.convertToEntityAttribute(ENCRYPTED_CVV)).thenReturn(VALID_CVV);
+        when(attributeEncryptor.convertToEntityAttribute(ENCRYPTED_EXPIRY)).thenReturn(VALID_EXPIRY);
+
+        // Act & Assert
+        assertThatThrownBy(() -> cardTransactionService.processTransaction(request))
+                .isInstanceOf(AccessDeniedException.class)
+                // Robustness: Use 'containing' to ignore minor typos/whitespace
+                .hasMessageContaining("FROZEN");
+
+        // Verification: The Ledger was never touched
+        verify(ledgerService, never()).recordEntry(any());
+        // Verification: No money was reserved in Redis (limitReserved never became true)
+        verify(cardLimitService, never()).recordSpend(any(), any());
+    }
+
+    /**
+     * Validates that the transaction is rejected if the underlying {@link Account}
+     * is {@code CLOSED}.
+     *
+     * <p>This scenario typically occurs when a user soft-deletes their account,
+     * but a recurring subscription (Netflix/Spotify) tries to charge a card
+     * that hasn't expired yet. The system must block this to prevent "Phantom Debits".
+     *
+     * @see CardTransactionService
+     * @see AccountStatus#CLOSED
+     */
+    @Test
+    @DisplayName("14. Gate 5d: Should throw AccessDenied if underlying Account is CLOSED")
+    void processTransaction_WhenAccountClosed_ShouldThrowAccessDenied() {
+        // Arrange
+        mockAccount.setStatus(AccountStatus.CLOSED);
+
+        // 1. Mock the Card Lookup
+        when(virtualCardRepository.findByPanFingerprint(HASHED_PAN)).thenReturn(Optional.of(mockCard));
+
+        // 2. Mock Security Gates (CVV/Expiry) - Mark LENIENT
+        // FIX: We use lenient() here. If the service checks AccountStatus *before* // calling the Encryptor, Mockito won't crash complaining about "Unnecessary Stubbings".
+        lenient().when(attributeEncryptor.convertToEntityAttribute(ENCRYPTED_CVV)).thenReturn(VALID_CVV);
+        lenient().when(attributeEncryptor.convertToEntityAttribute(ENCRYPTED_EXPIRY)).thenReturn(VALID_EXPIRY);
+
+        // Act: We capture the exception manually to inspect it
+        Throwable thrown = catchThrowable(() -> cardTransactionService.processTransaction(request));
+
+        // Assert
+        assertThat(thrown)
+                .as("Expected transaction to fail because Account is CLOSED")
+                .isNotNull()
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("Linked account is CLOSED");
+
+        // Verification: The Ledger was never touched
+        verify(ledgerService, never()).recordEntry(any());
     }
 }
