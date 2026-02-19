@@ -2,10 +2,13 @@ package com.opayque.api.wallet.repository;
 
 import com.opayque.api.wallet.entity.Account;
 import com.opayque.api.wallet.entity.LedgerEntry;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -62,4 +65,24 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, UUID> {
         WHERE l.account.id = :accountId
     """)
     java.math.BigDecimal getBalance(UUID accountId);
+
+    /**
+     * Epic 5.2: Retrieves a forward-only slice of ledger entries for high-performance CSV streaming.
+     * <p>
+     * Utilizes {@link org.springframework.data.domain.Slice} instead of {@code Page} to avoid
+     * the expensive {@code COUNT()} query on heavily populated ledger partitions.
+     * The query relies on the {@code idx_ledger_account_date} index for rapid chronological sorting.
+     *
+     * @param accountId  The unique identifier of the wallet account.
+     * @param startDate  The inclusive start boundary.
+     * @param endDate    The inclusive end boundary.
+     * @param pageable   Pagination instructions (Limit and Offset).
+     * @return A slice containing the requested entries and a flag indicating if more data exists.
+     */
+    Slice<LedgerEntry> findByAccountIdAndRecordedAtBetweenOrderByRecordedAtDesc(
+            UUID accountId,
+            LocalDateTime startDate,
+            LocalDateTime endDate,
+            Pageable pageable
+    );
 }

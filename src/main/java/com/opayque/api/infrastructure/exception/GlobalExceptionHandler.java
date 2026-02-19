@@ -187,7 +187,7 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
     }
 
-    /// Handles business state violations (e.g., "Wallet already exists" 1:1 rule).
+    ///Handles business state violations (e.g., "Wallet already exists" 1:1 rule).
     ///
     /// @param ex The {@link IllegalStateException} thrown when a state invariant is breached.
     /// @param request The web request context.
@@ -272,6 +272,26 @@ public class GlobalExceptionHandler {
                 HttpStatus.FORBIDDEN,
                 "CARD_LIMIT_EXCEEDED",
                 ex.getMessage(),
+                request
+        );
+    }
+
+    /// Handles IO network interruptions (e.g., "Broken Pipe" when a user cancels a CSV download).
+    /// Prevents routine client disconnects from triggering CRITICAL system alerts
+    /// in the fallback Exception handler.
+    ///
+    /// @param ex The IOException thrown by the disrupted network stream.
+    /// @param request The web request context.
+    /// @return A 503 Service Unavailable response with a sanitized message.
+    @ExceptionHandler(java.io.IOException.class)
+    public ResponseEntity<ErrorResponse> handleIOException(java.io.IOException ex, WebRequest request) {
+        // Logged at WARN because this is typically a client-side network drop, not a server bug.
+        log.warn("Network Stream Interrupted: Client likely disconnected or cancelled the download. Reason: {}", ex.getMessage());
+
+        return buildErrorResponse(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "STREAM_INTERRUPTED",
+                "The file download stream was interrupted.",
                 request
         );
     }

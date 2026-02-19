@@ -125,4 +125,61 @@ class SecurityUtilTest {
         IllegalStateException ex = assertThrows(IllegalStateException.class, SecurityUtil::getCurrentUserId);
         assertEquals("No authenticated user found in Security Context", ex.getMessage());
     }
+
+    // ==================================================================================
+    // AUTHORIZATION (hasAuthority) TESTS
+    // ==================================================================================
+
+    /// Validates the safety branch: if the SecurityContext is entirely empty
+    /// (authentication is null), it should safely return false instead of throwing a NullPointerException.
+    @Test
+    @DisplayName("Unit: hasAuthority should return false when Authentication is null")
+    void shouldReturnFalseWhenAuthIsNull_HasAuthority() {
+        // Arrange: Explicitly clear the context to simulate an unauthenticated thread
+        SecurityContextHolder.clearContext();
+
+        // Act
+        boolean hasAdminRole = SecurityUtil.hasAuthority("ROLE_ADMIN");
+
+        // Assert
+        assertFalse(hasAdminRole, "Should safely return false when no authentication exists in the context.");
+    }
+
+    /// Verifies the "Happy Path" where the authenticated user possesses the exact
+    /// authority being requested.
+    @Test
+    @DisplayName("Unit: hasAuthority should return true when user possesses the requested role")
+    void shouldReturnTrueWhenUserHasAuthority() {
+        // Arrange: Create an auth token with the ROLE_ADMIN authority
+        org.springframework.security.core.authority.SimpleGrantedAuthority adminAuthority =
+                new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN");
+
+        Authentication auth = new UsernamePasswordAuthenticationToken(
+                "adminUser", "pass", Collections.singletonList(adminAuthority)
+        );
+        SecurityContextHolder.getContext().setAuthentication(auth);
+
+        // Act & Assert
+        assertTrue(SecurityUtil.hasAuthority("ROLE_ADMIN"),
+                "Should return true because the user explicitly has the ROLE_ADMIN authority.");
+    }
+
+    /// Ensures strict security boundaries by verifying that users with lower or
+    /// different privileges are correctly denied.
+    @Test
+    @DisplayName("Unit: hasAuthority should return false when user lacks the requested role")
+    void shouldReturnFalseWhenUserLacksAuthority() {
+        // Arrange: Create an auth token with ONLY the ROLE_CUSTOMER authority
+        org.springframework.security.core.authority.SimpleGrantedAuthority customerAuthority =
+                new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_CUSTOMER");
+
+        Authentication auth = new UsernamePasswordAuthenticationToken(
+                "standardUser", "pass", Collections.singletonList(customerAuthority)
+        );
+        SecurityContextHolder.getContext().setAuthentication(auth);
+
+        // Act & Assert
+        assertFalse(SecurityUtil.hasAuthority("ROLE_ADMIN"),
+                "Should return false because the user only has ROLE_CUSTOMER, not ROLE_ADMIN.");
+    }
 }

@@ -273,5 +273,17 @@ class LedgerPropertyTest {
         @Override public void deleteAllById(Iterable<? extends UUID> uuids) {}
         @Override public void deleteAll(Iterable<? extends LedgerEntry> entities) {}
         @Override public void deleteAll() {}
+
+        // EPIC 5: Satisfying the contract for Statement Generation
+        @Override
+        public org.springframework.data.domain.Slice<LedgerEntry> findByAccountIdAndRecordedAtBetweenOrderByRecordedAtDesc(
+                java.util.UUID accountId,
+                java.time.LocalDateTime startDate,
+                java.time.LocalDateTime endDate,
+                org.springframework.data.domain.Pageable pageable
+        ) {
+            // Safe dummy return for Epic 2 math property tests
+            return new org.springframework.data.domain.SliceImpl<>(java.util.Collections.emptyList());
+        }
     }
 }

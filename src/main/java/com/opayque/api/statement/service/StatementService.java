@@ -1,0 +1,274 @@
+package com.opayque.api.statement.service;
+
+import com.opayque.api.infrastructure.exception.ServiceUnavailableException;
+import com.opayque.api.infrastructure.ratelimit.RateLimiterService;
+import com.opayque.api.infrastructure.util.SecurityUtil;
+import com.opayque.api.statement.controller.StatementController;
+import com.opayque.api.statement.dto.StatementExportRequest;
+import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.LedgerEntry;
+import com.opayque.api.wallet.repository.AccountRepository;
+import com.opayque.api.wallet.repository.LedgerRepository;
+import com.opayque.api.wallet.service.IbanMetadata;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.PrintWriter;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+/**
+ * High-performance, memory-safe Statement Export Service.
+ * <p>
+ * Responsibilities:
+ * <ul>
+ * <li>Streams chronological ledger data directly to the network buffer to keep heap usage < 200MB.</li>
+ * <li>Enforces BOLA (Broken Object Level Authorization) by guaranteeing account ownership.</li>
+ * <li>Sanitizes all text fields against CSV/Formula Injection attacks (OWASP mitigation).</li>
+ * <li>Excludes unsupported jurisdictions defensively based on the authoritative IbanMetadata registry.</li>
+ * </ul>
+ *
+ * @author Madavan Babu
+ * @since 2026
+ */
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class StatementService {
+
+    private final LedgerRepository ledgerRepository;
+    private final AccountRepository accountRepository;
+    private final RateLimiterService rateLimiterService;
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    private static final int CHUNK_SIZE = 500;
+    private static final int MAX_MONTHS_RANGE = 6;
+    private static final int RATE_LIMIT_QUOTA = 5; // Max 5 exports per minute per user
+
+    // Dynamically synchronized with the authoritative IBAN Jurisdiction Registry
+    private static final Set<String> SUPPORTED_CURRENCIES = Arrays.stream(IbanMetadata.values())
+            .map(IbanMetadata::getCurrencyCode)
+            .collect(Collectors.toUnmodifiableSet());
+
+    private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /**
+     * <p>Exports a CSV statement for the specified {@link StatementExportRequest} and writes it to the provided {@link PrintWriter}.</p>
+     *
+     * <p>The method performs the following steps:</p>
+     * <ul>
+     *   <li>Validates the request's date range against {@code MAX_MONTHS_RANGE}.</li>
+     *   <li>Retrieves the {@link Account} and enforces ownership or admin authorization.</li>
+     *   <li>Applies rate limiting via {@link RateLimiterService} to mitigate bulk‑export DoS risks.</li>
+     *   <li>Writes masked metadata and column headers to the CSV output.</li>
+     *   <li>Streams ledger entries in chunks (defined by {@code CHUNK_SIZE}) using {@link LedgerRepository}, filtering out unsupported currencies and formatting each row according to RFC 4180.</li>
+     *   <li>Flushes the writer after each page to free heap space and logs progress.</li>
+     * </ul>
+     *
+     * <p>If an unexpected error occurs during streaming, a {@link ServiceUnavailableException} is thrown to indicate that the export did not complete successfully.</p>
+     *
+     * @param request the {@link StatementExportRequest} containing {@code accountId},
+     *                {@code startDate}, and {@code endDate}; validated before processing.
+     * @param writer  the {@link PrintWriter} that receives the CSV data; flushed
+     *                after each result page to maintain memory efficiency.
+     *
+     * @see StatementController
+     * @see LedgerRepository
+     * @see AccountRepository
+     * @see RateLimiterService
+     */
+    @Transactional(readOnly = true)
+    public void exportStatement(StatementExportRequest request, PrintWriter writer) {
+        // 1. Validate Input Boundaries
+        request.validateDateRange(MAX_MONTHS_RANGE);
+        UUID currentUserId = SecurityUtil.getCurrentUserId();
+
+        log.info("Initiating Statement Export | Account: {} | Range: {} to {}",
+                request.accountId(), request.startDate(), request.endDate());
+
+        // 2. Fetch Account & Enforce BOLA / RBAC
+        Account account = accountRepository.findById(request.accountId())
+                .orElseThrow(() -> {
+                    log.warn("Export Failed: Account {} not found. Target may have been hard-deleted.", request.accountId());
+                    return new IllegalArgumentException("Account not found");
+                });
+
+        verifyAuthorization(account, currentUserId);
+
+        // 3. Rate Limiting (Guard against bulk-export DoS attacks)
+        rateLimiterService.checkLimit(currentUserId.toString(), "statement_export", RATE_LIMIT_QUOTA);
+
+        try {
+            // 4. Write PII-Masked Metadata Header
+            writeCsvMetadata(writer, account, request);
+
+            // 5. Write Column Headers
+            writer.println("Date (UTC),Transaction ID,Type,Direction,Description,Amount,Currency,Original Amount,Exchange Rate");
+
+            // 6. Execute Streaming Query (The OOM Defense)
+            LocalDateTime startBoundary = request.startDate().atStartOfDay();
+            LocalDateTime endBoundary = request.endDate().atTime(23, 59, 59);
+
+            Pageable pageable = PageRequest.of(0, CHUNK_SIZE);
+            Slice<LedgerEntry> ledgerSlice;
+            int totalRecordsProcessed = 0;
+
+            do {
+                ledgerSlice = ledgerRepository.findByAccountIdAndRecordedAtBetweenOrderByRecordedAtDesc(
+                        request.accountId(), startBoundary, endBoundary, pageable
+                );
+
+                for (LedgerEntry entry : ledgerSlice) {
+                    // Defensive Jurisdiction Check against authoritative registry
+                    if (!SUPPORTED_CURRENCIES.contains(entry.getCurrency())) {
+                        log.error("Data Integrity Breach: Unsupported currency '{}' detected in Ledger {}",
+                                entry.getCurrency(), entry.getId());
+                        continue; // Exclude from export to maintain compliance
+                    }
+
+                    writeLedgerRow(writer, entry);
+                    totalRecordsProcessed++;
+                }
+
+                // Flush buffer to the network layer to free up JVM Heap space
+                writer.flush();
+
+                // PRECISION FIX: Detach processed entities from Hibernate L1 Cache
+                // This drops the 500 records from the JVM heap before the next fetch.
+                entityManager.clear();
+
+                pageable = ledgerSlice.nextPageable();
+
+            } while (ledgerSlice.hasNext());
+
+            log.info("Statement Export Complete | Account: {} | Total Records: {}", request.accountId(), totalRecordsProcessed);
+
+        } catch (Exception e) {
+            log.error("CRITICAL: Stream interrupted during CSV generation for Account {}", request.accountId(), e);
+            throw new ServiceUnavailableException("Failed to complete statement generation stream.");
+        }
+    }
+
+    // ==================================================================================
+    //                                 PRIVATE HELPERS
+    // ==================================================================================
+
+    /**
+     * Strictly verifies that the user requesting the export either owns the wallet
+     * or possesses an overriding ADMIN authority.
+     * <p>
+     * Note: Evaluated manually rather than via @PreAuthorize to strictly comply
+     * with the "No AOP" architectural constraint and keep the domain logic explicit.
+     */
+    private void verifyAuthorization(Account account, UUID currentUserId) {
+        boolean isOwner = account.getUser().getId().equals(currentUserId);
+
+        // ARCHITECTURE FIX: Use centralized SecurityUtil instead of direct ContextHolder access
+        boolean isAdmin = SecurityUtil.hasAuthority("ROLE_ADMIN");
+
+        if (!isOwner && !isAdmin) {
+            log.warn("SECURITY EVENT: BOLA Violation Attempt. User {} attempted to access Account {}",
+                    currentUserId, account.getId());
+            throw new AccessDeniedException("You do not have permission to access this statement.");
+        }
+    }
+
+    /**
+     * Formats the CSV header metadata, ensuring IBANs are masked to prevent PII leakage
+     * in downloaded files sitting in user "Downloads" folders.
+     */
+    private void writeCsvMetadata(PrintWriter writer, Account account, StatementExportRequest request) {
+        writer.println("--- oPayque Account Statement ---");
+        writer.println("Account ID," + account.getId());
+        writer.println("Account IBAN," + maskIban(account.getIban()));
+        writer.println("Statement Period," + request.startDate() + " to " + request.endDate());
+        writer.println("Generated On," + LocalDateTime.now().format(ISO_FORMATTER));
+        writer.println("---------------------------------");
+    }
+
+    /**
+     * Maps a LedgerEntry into an RFC 4180 compliant CSV row.
+     */
+    private void writeLedgerRow(PrintWriter writer, LedgerEntry entry) {
+        String row = String.join(",",
+                entry.getRecordedAt().format(ISO_FORMATTER),
+                entry.getId().toString(),
+                entry.getTransactionType().name(),
+                entry.getDirection(),
+                sanitizeCsv(entry.getDescription()),
+                formatAmount(entry.getAmount()),
+                entry.getCurrency(),
+                formatAmount(entry.getOriginalAmount()),
+                formatExchangeRate(entry.getExchangeRate())
+        );
+        writer.println(row);
+    }
+
+    /**
+     * CSV Injection Protection (OWASP standard).
+     * Neutralizes executable payload formulas by stripping dangerous prefix characters.
+     */
+    private String sanitizeCsv(String input) {
+        if (input == null || input.isBlank()) {
+            return "";
+        }
+
+        String clean = input.trim();
+        // Strip leading operators that trigger Excel formula evaluation
+        if (clean.startsWith("=") || clean.startsWith("+") || clean.startsWith("-") || clean.startsWith("@")) {
+            clean = clean.substring(1).trim();
+            log.trace("Sanitized potential CSV injection payload.");
+        }
+
+        // Escape internal double quotes by doubling them up, and wrap in outer quotes if commas exist
+        String escaped = clean.replace("\"", "\"\"");
+        if (escaped.contains(",") || escaped.contains("\n") || escaped.contains("\"")) {
+            return "\"" + escaped + "\"";
+        }
+        return escaped;
+    }
+
+    /**
+     * Applies standard Bank masking rules to the IBAN (e.g., DE30 **** **** 1234).
+     * Defensive check included to prevent out-of-bounds exceptions on malformed DB entries.
+     */
+    private String maskIban(String iban) {
+        if (iban == null || iban.length() < 8) {
+            log.warn("Malformed IBAN detected during masking process.");
+            return "INVALID_IBAN";
+        }
+        return iban.substring(0, 4) + " **** **** " + iban.substring(iban.length() - 4);
+    }
+
+    /**
+     * Enforces strict Scale 4 formatting with Bankers Rounding for output consistency.
+     */
+    private String formatAmount(BigDecimal amount) {
+        if (amount == null) return "";
+        return amount.setScale(4, RoundingMode.HALF_EVEN).toPlainString();
+    }
+
+    /**
+     * Retains Precision 6 for exchange rates as defined in the DB schema.
+     */
+    private String formatExchangeRate(BigDecimal rate) {
+        if (rate == null) return "";
+        return rate.setScale(6, RoundingMode.HALF_EVEN).toPlainString();
+    }
+}

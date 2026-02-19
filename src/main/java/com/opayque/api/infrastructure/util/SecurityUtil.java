@@ -61,4 +61,20 @@ public final class SecurityUtil {
     public static void clear() {
         SecurityContextHolder.clearContext();
     }
+
+    /**
+     * Checks if the current authenticated user has a specific authority/role.
+     * @param authority The authority to check (e.g., "ROLE_ADMIN")
+     * @return true if the user possesses the authority, false otherwise.
+     */
+    public static boolean hasAuthority(String authority) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+        if (authentication == null) {
+            return false;
+        }
+
+        return authentication.getAuthorities().stream()
+                .anyMatch(grantedAuthority -> grantedAuthority.getAuthority().equals(authority));
+    }
 }
