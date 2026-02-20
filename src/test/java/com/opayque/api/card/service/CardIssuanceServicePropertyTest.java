@@ -483,6 +483,9 @@ class CardIssuanceServicePropertyTest {
      * Authority: ROLE_CUSTOMER – matches production access control matrix.
      */
     private void mockCurrentUser(UUID userId) {
+        // FIX: Force clear the context to prevent thread leakage across the 1,000 Jqwik iterations
+        SecurityContextHolder.clearContext();
+
         User principal = User.builder().id(userId).email("pbt@opayque.com").role(Role.CUSTOMER).build();
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                 principal, null, List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER"))

@@ -3,9 +3,11 @@ package com.opayque.api.statement.controller;
 import com.opayque.api.identity.entity.Role;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
+import com.opayque.api.statement.service.StatementService;
 import com.opayque.api.wallet.entity.Account;
 import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.repository.AccountRepository;
+import com.opayque.api.wallet.repository.LedgerRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,6 +40,25 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+/**
+ * <p>This integration test class performs comprehensive stress‑testing of the
+ * statement‑retrieval and rate‑limiting subsystems of the banking platform.</p>
+ *
+ * <p>It validates that the application can sustain extreme load patterns—such as
+ * massive record hydration, database contention, Redis rate‑limiter thrashing,
+ * network disconnects, and data‑skew pagination—without exhausting JVM heap,
+ * exhausting HikariCP connection pools, leaking resources, or degrading
+ * throughput.</p>
+ *
+ * <p>The test suite exercises both PostgreSQL and Redis back‑ends through the
+ * {@link UserRepository} and {@link AccountRepository} data‑access layers,
+ * while also leveraging {@code MockMvc} to simulate HTTP interactions.</p>
+ *
+ * @author Madavan Babu
+ * @since 2026
+ * @see UserRepository
+ * @see AccountRepository
+ */
 @Slf4j
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
@@ -120,6 +141,29 @@ class StatementStressTest {
     // MASSIVE DATA SEEDING
     // ==================================================================================
 
+    /**
+     * Initializes a high‑value "whale" {@link User} and its corresponding {@link Account}
+     * for the {@code StatementStressTest} suite.
+     * <p>
+     * The method performs the following steps:
+     * <ul>
+     *   <li>Creates a {@link User} with a preset full name, email, hashed password and the
+     *       {@link Role#CUSTOMER} role.</li>
+     *   <li>Persists the user using {@link UserRepository}.</li>
+     *   <li>Creates an {@link Account} linked to the persisted user, assigns a fixed IBAN,
+     *       the EUR currency code, and sets the status to {@link AccountStatus#ACTIVE}.</li>
+     *   <li>Persists the account via {@link AccountRepository}.</li>
+     *   <li>Invokes {@link #seedMassiveLedger(UUID, int)} to pre‑populate the ledger
+     *       with {@code WHALE_RECORD_COUNT} records for the newly created account.</li>
+     * </ul>
+     * This setup isolates the "whale" scenario, allowing subsequent tests to verify
+     * memory usage, database contention and other stress‑related behaviours without
+     * affecting other test data.
+     *
+     * @see UserRepository
+     * @see AccountRepository
+     * @see StatementStressTest#seedMassiveLedger(UUID, int)
+     */
     @BeforeAll
     void setupWhaleAccount() {
         whaleUser = User.builder()
@@ -141,6 +185,22 @@ class StatementStressTest {
         seedMassiveLedger(whaleAccount.getId(), WHALE_RECORD_COUNT);
     }
 
+    /**
+     * Clears all Redis keys used for rate‑limiting before each test execution.
+     * <p>
+     * The method invokes {@link RedisTemplate} with a low‑level {@code RedisCallback}
+     * that issues {@code FLUSHALL} to the embedded Redis Testcontainer. This guarantees
+     * a pristine Redis state, eliminating interference from previous test runs and
+     * ensuring deterministic behavior of the {@code RateLimiter} logic under stress.
+     * <p>
+     * By using {@code connection.serverCommands().flushAll()} instead of the
+     * deprecated {@code flushDb()}, the implementation works regardless of the
+     * underlying Redis version and fully clears both the default and any additional
+     * databases that may have been created during the test suite.
+     *
+     * @see StatementStressTest
+     * @see RedisTemplate
+     */
     @BeforeEach
     void clearRateLimits() {
         // VECTOR ISOLATION:
@@ -161,6 +221,34 @@ class StatementStressTest {
         userRepository.deleteAll();
     }
 
+    /**
+     * Populates the {@code ledger_entries} table with a large number of synthetic records for a
+     * given account. This method is used by the stress‑test suite to simulate a “whale” scenario
+     * where an account holds hundreds of thousands of transactions, allowing the application
+     * to be exercised under heavy read/write load without affecting production data.
+     *
+     * <p>It builds a single {@link java.sql.PreparedStatement} and executes a batch update via
+     * {@link JdbcTemplate#batchUpdate(String, org.springframework.jdbc.core.BatchPreparedStatementSetter)}.
+     * Each generated row contains:
+     * <ul>
+     *   <li>a random {@code UUID} primary key (column {@code id})</li>
+     *   <li>the supplied {@code accountId} as a foreign key to {@code account_id}</li>
+     *   <li>a constant amount of {@code 150.00} in {@code EUR}</li>
+     *   <li>direction {@code IN}, transaction type {@code CREDIT}</li>
+     *   <li>a description {@code "Stress Test Transaction " + i}</li>
+     *   <li>a timestamp spaced by one minute starting three months ago</li>
+     * </ul>
+     *
+     * <p>Because the batch size equals {@code count}, the method can efficiently insert millions
+     * of rows with minimal memory overhead, which is essential for the memory‑constrained heap
+     * exhaustion test vector.
+     *
+     * @param accountId the identifier of the {@link Account} whose ledger is to be seeded
+     * @param count     the total number of ledger entries to insert; the batch size is set to this value
+     *
+     * @see StatementStressTest
+     * @see JdbcTemplate
+     */
     // VECTOR 1 & 2 Helper: High-speed batch insert
     @SuppressWarnings("SqlResolve") // Silences IDE errors as the schema exists only inside the container
     private void seedMassiveLedger(UUID accountId, int count) {
@@ -200,8 +288,43 @@ class StatementStressTest {
     // ==================================================================================
 
     /**
-     * VECTOR 1: Heap Exhaustion (The Whale Account)
-     * Proof that the JVM does not attempt to hydrate 100,000 records simultaneously.
+     * <p>Integration test that validates the CSV export endpoint for a large
+     * “whale” account operates with constant heap memory.</p>
+     *
+     * <p>The test proceeds through four distinct phases:</p>
+     *
+     * <ul>
+     *   <li><strong>Phase 1 – Baseline measurement:</strong> Forces a garbage
+     *       collection, pauses briefly, then records the current heap usage
+     *       ({@code baselineMemoryMb}).</li>
+     *
+     *   <li><strong>Phase 2 – Stream execution:</strong> Sends a {@code GET}
+     *       request to {@code /api/v1/statements/export} for the whale account,
+     *       streams the response using a {@link java.util.Scanner}, and counts
+     *       each line to verify that all rows are returned without loading the
+     *       entire payload into a {@link String}.</li>
+     *
+     *   <li><strong>Phase 3 – Pre‑GC leak detection:</strong> Captures heap usage
+     *       immediately after the stream completes ({@code preGcMemoryMb}) and
+     *       forces another garbage collection to clear any lingering references
+     *       (e.g., detached JPA entities).</li>
+     *
+     *   <li><strong>Phase 4 – Post‑GC verification:</strong> Measures the residual
+     *       heap ({@code residualMemoryMb}) and asserts that the retained growth
+     *       ({@code retainedGrowthMb}) stays below a strict 25 MB threshold, thus
+     *       confirming that the export logic does not retain hard references that
+     *       would cause a memory leak.</li>
+     * </ul>
+     *
+     * <p>The purpose of this test is to guarantee that the export mechanism,
+     * typically implemented with {@link org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody}
+     * or similar streaming APIs, scales to very large data sets (e.g., 100 000 rows)
+     * without exhausting the JVM heap, thereby preventing {@code OutOfMemoryError}
+     * in production environments.</p>
+     *
+     * @see StatementController
+     * @see StatementService
+     * @see com.opayque.api.wallet.repository.LedgerRepository
      */
     @Test
     void test1_WhaleAccount_HeapExhaustion_MaintainsConstantMemory() throws Exception {
@@ -263,10 +386,36 @@ class StatementStressTest {
         log.info("--- WHALE ACCOUNT MEMORY STRESS TEST PASSED ---");
     }
 
+
     /**
-     * VECTOR 2: Database Contention (The Thundering Herd)
-     * Proves the system handles extreme concurrent bursts without dropping connections
-     * or throwing HikariCP PoolTimeoutExceptions.
+     * Validates that a simultaneous burst of {@code CONCURRENCY} request threads
+     * (a “thundering herd”) does not exhaust the HikariCP connection pool.
+     * <p>
+     * The test proceeds in several phases:
+     * <ul>
+     *   <li>Creates {@code CONCURRENCY} unique {@link User} entities to bypass per‑user
+     *       rate limiting, each linked to a freshly persisted {@link Account}.</li>
+     *   <li>Seeds each account with a configurable number of ledger entries via
+     *       {@link #seedMassiveLedger(UUID, int)} to ensure the database performs
+     *       non‑trivial work for every export request.</li>
+     *   <li>Initialises a fixed‑size {@link ExecutorService}
+     *       and synchronisation latches so that all threads issue the HTTP GET to
+     *       {@code /api/v1/statements/export} at the exact same millisecond.</li>
+     *   <li>Collects success and failure counts, asserting that every request completes
+     *       with HTTP 200 and that no deadlock or pool starvation occurs.</li>
+     * </ul>
+     * <p>
+     * The purpose of this test is to ensure that the system’s database connection
+     * pool size (aligned with the HikariCP maximum pool size) is sufficient to handle
+     * the worst‑case concurrent load without dropping requests or causing timeouts.
+     *
+     * @throws Exception if any thread encounters an unexpected error during request
+     *         execution or latch coordination.
+     *
+     * @see StatementController
+     * @see StatementService
+     * @see AccountRepository
+     * @see UserRepository
      */
     @Test
     void test2_ThunderingHerd_DBContention_DoesNotExhaustConnectionPool() throws Exception {
@@ -355,9 +504,23 @@ class StatementStressTest {
     }
 
     /**
-     * VECTOR 3: Redis Rate Limiter Thrashing (Contention Vector)
-     * Proof of atomicity: Blasting a single user's quota with concurrent threads
-     * ensures exactly the quota (5) passes and exactly the rest (95) are blocked.
+     * <p>Validates that the rate‑limiting mechanism defined in {@link StatementService}
+     * enforces the strict quota even under intense concurrent access.</p>
+     *
+     * <p>The test creates {@code CONCURRENT_ATTEMPTS} parallel threads that all invoke
+     * the <code>/api/v1/statements/export</code> endpoint. A {@link CountDownLatch}
+     * synchronises the start of the requests, generating a “blast” of traffic that
+     * forces the Redis Lua script backing the limiter to operate under high contention.
+     * Exactly {@code ALLOWED_QUOTA} requests are expected to succeed with HTTP 200,
+     * while the remaining requests must be rejected with HTTP 429.</p>
+     *
+     * <p>This scenario confirms the atomicity of the Lua script and guarantees that
+     * the {@link com.opayque.api.infrastructure.ratelimit.RateLimiterService} does not exceed the configured quota, thereby protecting
+     * downstream services from throttling attacks.</p>
+     *
+     * @see StatementService
+     * @see StatementController
+     * @see com.opayque.api.wallet.repository.LedgerRepository
      */
     @Test
     void test3_RateLimiter_Thrashing_EnforcesStrictQuota() throws Exception {
@@ -407,9 +570,30 @@ class StatementStressTest {
     }
 
     /**
-     * VECTOR 4: Network Exhaustion (The "Subway Commuter" Broken Pipe)
-     * Simulates client disconnects mid-stream. Proves that Tomcat/JVM thread interrupts
-     * safely rollback database cursors and release HikariCP connections without leaking.
+     * <p>Integration test that validates the graceful release of database resources when a client
+     * connection is unexpectedly terminated (simulated a broken pipe scenario).</p>
+     *
+     * <p>The test performs the following steps:</p>
+     * <ul>
+     *   <li>Creates a fresh {@link User} with the role {@code CUSTOMER} and persists it using
+     *       {@link UserRepository}.</li>
+     *   <li>Creates an {@link Account} linked to the user and persists it via {@link AccountRepository}.</li>
+     *   <li>Seeds a large ledger (5,000 rows) for the account to guarantee multiple DB cursor chunks.</li>
+     *   <li>Issues {@code QUOTA} concurrent HTTP {@code GET} requests to the
+     *       <code>/api/v1/statements/export</code> endpoint, each executing in its own thread.</li>
+     *   <li>After a brief pause, forcefully cancels all request futures to mimic a client socket drop,
+     *       thereby triggering a {@code BrokenPipeException} (or equivalent) on the server side.</li>
+     *   <li>Verifies that the executor shuts down cleanly, confirming that no thread remains blocked.</li>
+     *   <li>Executes a quick repository query to ensure the connection pool (e.g., Hikari) is still
+     *       functional, proving that all DB connections have been reclaimed.</li>
+     * </ul>
+     *
+     * <p>This test is crucial for confirming that the service layer’s exception handling and the
+     * {@code @Transactional} boundaries correctly close DB cursors and return connections to the pool,
+     * preventing deadlocks or pool exhaustion under abrupt client termination.</p>
+     *
+     * @see UserRepository
+     * @see AccountRepository
      */
     @Test
     void test4_SubwayCommuter_BrokenPipe_GracefullyReleasesResources() throws Exception {
@@ -475,10 +659,30 @@ class StatementStressTest {
     }
 
     /**
-     * VECTOR 5: Data Skew Pagination Chaos (CPU/IO Starvation Vector)
-     * Injects 20,000 records with the EXACT same timestamp and highly complex, malicious CSV payloads.
-     * Proves that the database index handles extreme skew and that the CPU-bound sanitizeCsv()
-     * string manipulation does not cause O(n^2) latency spikes.
+     * Tests the system's ability to maintain acceptable throughput when faced with extreme data‑skew
+     * and a malicious CSV payload that forces every branch of {@link StatementService}
+     * to execute.
+     *
+     * <p>The test performs the following steps:
+     * <ul>
+     *   <li>Creates an isolated {@link User} (role {@code Role.CUSTOMER}) and a corresponding {@link Account}.</li>
+     *   <li>Generates a “chaos” payload containing an injection prefix, embedded quotes, new‑lines and commas.</li>
+     *   <li>Inserts {@code SKEW_RECORD_COUNT} ledger entries (20 000) that all share the same {@code recorded_at}
+     *       timestamp, producing extreme data‑skew.</li>
+     *   <li>Calls the statement export endpoint and measures the elapsed time.</li>
+     *   <li>Verifies that the payload is correctly escaped (the injection prefix is not leaked) and that the total
+     *       processing time remains below the SLA threshold (5 seconds).</li>
+     * </ul>
+     *
+     * <p>This scenario simulates a worst‑case combination of data distribution skew and complex string handling,
+     * ensuring that the pagination/streaming logic in {@link StatementService} does not become a CPU bottleneck
+     * and that security sanitisation remains effective.
+     *
+     * @see StatementController
+     * @see StatementService
+     * @see LedgerRepository
+     * @see AccountRepository
+     * @see UserRepository
      */
     @Test
     @SuppressWarnings("SqlResolve")

@@ -251,7 +251,7 @@ class DashboardLoadTest {
         log.info("RESULTS: Total={}ms | Avg={}ms | Max={}ms", totalDuration, average, max);
 
         boolean isCI = System.getenv("CI") != null;
-        long threshold = isCI ? 500 : 200;
+        long threshold = isCI ? 600 : 200; //Local Env has 12 threaded CPU, GitHub CI Runner has 2-4 threaded CPU.
 
         log.info("Environment Context: [CI Detected: {}] -> Threshold: {}ms", isCI, threshold);
 

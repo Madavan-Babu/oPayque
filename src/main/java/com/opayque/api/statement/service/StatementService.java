@@ -170,11 +170,24 @@ public class StatementService {
     // ==================================================================================
 
     /**
-     * Strictly verifies that the user requesting the export either owns the wallet
-     * or possesses an overriding ADMIN authority.
-     * <p>
-     * Note: Evaluated manually rather than via @PreAuthorize to strictly comply
-     * with the "No AOP" architectural constraint and keep the domain logic explicit.
+     * <p>Verifies that the {@code currentUserId} is permitted to access the specified {@link Account}.</p>
+     *
+     * <p>The authorization check consists of two rules:</p>
+     * <ul>
+     *   <li>Ownership – the {@link com.opayque.api.identity.entity.User} linked to the {@link Account} has an identifier equal to {@code currentUserId}.</li>
+     *   <li>Administrative privilege – the caller possesses the {@code ROLE_ADMIN} authority as evaluated by {@link SecurityUtil}.</li>
+     * </ul>
+     *
+     * <p>If neither rule is satisfied, a security warning is logged and an
+     * {@link AccessDeniedException} is thrown to prevent a Broken Object Level
+     * Authorization (BOLA) breach.</p>
+     *
+     * @param account the {@link Account} whose access is being validated; it must include the associated {@link com.opayque.api.identity.entity.User}.
+     * @param currentUserId the UUID of the user performing the operation.
+     *
+     * @see StatementController
+     * @see AccountRepository
+     * @see SecurityUtil
      */
     private void verifyAuthorization(Account account, UUID currentUserId) {
         boolean isOwner = account.getUser().getId().equals(currentUserId);
@@ -190,8 +203,27 @@ public class StatementService {
     }
 
     /**
-     * Formats the CSV header metadata, ensuring IBANs are masked to prevent PII leakage
-     * in downloaded files sitting in user "Downloads" folders.
+     * <p>Writes the static header section of a CSV account statement.</p>
+     *
+     * <p>This metadata supplies essential context for the exported ledger rows,
+     * allowing downstream systems (e.g., banking portals or audit tools) to
+     * identify the originating {@link Account}, the reporting period, and the
+     * generation timestamp. The IBAN is masked via {@link #maskIban(String)} to
+     * comply with data‑privacy requirements while still enabling verification of
+     * the account reference.</p>
+     *
+     * @param writer  the {@link PrintWriter} that receives the CSV output; each
+     *                invocation appends a new line to the stream.
+     * @param account the {@link Account} whose {@code id} and masked {@code iban}
+     *                are recorded in the header.
+     * @param request the {@link StatementExportRequest} providing the
+     *                {@code startDate} and {@code endDate} that define the statement
+     *                period.
+     *
+     * @see StatementController
+     * @see LedgerRepository
+     * @see AccountRepository
+     * @see RateLimiterService
      */
     private void writeCsvMetadata(PrintWriter writer, Account account, StatementExportRequest request) {
         writer.println("--- oPayque Account Statement ---");
@@ -203,7 +235,32 @@ public class StatementService {
     }
 
     /**
-     * Maps a LedgerEntry into an RFC 4180 compliant CSV row.
+     * <p>Formats a single {@link LedgerEntry} as a CSV row and writes it to the supplied {@link PrintWriter}.</p>
+     *
+     * <p>The row contains the following fields in strict RFC 4180 order:</p>
+     * <ul>
+     *   <li>Timestamp of the entry, formatted with {@code ISO_FORMATTER}.</li>
+     *   <li>Entry identifier.</li>
+     *   <li>Transaction type (enum name).</li>
+     *   <li>Direction string.</li>
+     *   <li>Sanitized description to prevent CSV injection.</li>
+     *   <li>Amount, formatted via {@link #formatAmount(BigDecimal)}.</li>
+     *   <li>Currency code.</li>
+     *   <li>Original amount, also formatted via {@link #formatAmount(BigDecimal)}.</li>
+     *   <li>Exchange rate, formatted via {@link #formatExchangeRate(BigDecimal)}.</li>
+     * </ul>
+     *
+     * <p>This method is a core part of the CSV export process performed by
+     * {@link StatementService#exportStatement(StatementExportRequest, PrintWriter)}. By writing one
+     * line at a time it enables streaming large data sets without excessive memory consumption.</p>
+     *
+     * @param writer the {@link PrintWriter} that receives the CSV output; each invocation appends a
+     *               new line to the underlying stream.
+     * @param entry  the {@link LedgerEntry} whose data is to be serialized into the CSV row.
+     *
+     * @see StatementController
+     * @see LedgerRepository
+     * @see StatementService
      */
     private void writeLedgerRow(PrintWriter writer, LedgerEntry entry) {
         String row = String.join(",",
@@ -221,8 +278,26 @@ public class StatementService {
     }
 
     /**
-     * CSV Injection Protection (OWASP standard).
-     * Neutralizes executable payload formulas by stripping dangerous prefix characters.
+     * <p>Sanitizes a CSV field to mitigate injection attacks and to comply with RFC 4180.</p>
+     *
+     * <p>The processing steps are:</p>
+     * <ul>
+     *   <li>Returns an empty string when {@code input} is {@code null} or blank.</li>
+     *   <li>Trims surrounding whitespace.</li>
+     *   <li>Strips leading characters that trigger formula evaluation in spreadsheet programs
+     *       (<code>=</code>, <code>+</code>, <code>-</code>, <code>@</code>).</li>
+     *   <li>Escapes internal double‑quote characters by doubling them.</li>
+     *   <li>Wraps the result in double quotes if it contains a comma, newline, or quote,
+     *       as required by RFC 4180.</li>
+     * </ul>
+     *
+     * @param input the raw CSV cell content to be sanitized; may be {@code null} or blank.
+     * @return a safe CSV representation of {@code input}, or an empty string when the input is {@code null} or blank.
+     *
+     * @see #writeLedgerRow(PrintWriter, LedgerEntry)
+     * @see StatementController
+     * @see LedgerRepository
+     * @see StatementService
      */
     private String sanitizeCsv(String input) {
         if (input == null || input.isBlank()) {
