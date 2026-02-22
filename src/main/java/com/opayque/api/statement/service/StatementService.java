@@ -10,6 +10,7 @@ import com.opayque.api.wallet.entity.LedgerEntry;
 import com.opayque.api.wallet.repository.AccountRepository;
 import com.opayque.api.wallet.repository.LedgerRepository;
 import com.opayque.api.wallet.service.IbanMetadata;
+import io.micrometer.core.annotation.Timed;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
@@ -93,6 +94,7 @@ public class StatementService {
      * @see AccountRepository
      * @see RateLimiterService
      */
+    @Timed(value = "opayque.statement.export", description = "Execution time for memory-safe ledger streaming and CSV generation")
     @Transactional(readOnly = true)
     public void exportStatement(StatementExportRequest request, PrintWriter writer) {
         // 1. Validate Input Boundaries

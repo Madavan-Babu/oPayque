@@ -12,6 +12,7 @@ import com.opayque.api.wallet.entity.LedgerEntry;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.service.AccountService;
 import com.opayque.api.wallet.service.LedgerService;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
@@ -42,11 +43,11 @@ import java.util.UUID;
  * @author Madavan Babu
  * @since 2026
  *
- * @see {@link AdminWalletController}
- * @see {@link AccountService}
- * @see {@link LedgerService}
- * @see {@link RateLimiterService}
- * @see {@link UserRepository}
+ * @see AdminWalletController
+ * @see AccountService
+ * @see LedgerService
+ * @see RateLimiterService
+ * @see UserRepository
  */
 @Service
 @RequiredArgsConstructor
@@ -86,6 +87,7 @@ public class AdminWalletService {
      * @see RateLimiterService
      * @see UserRepository
      */
+    @Timed(value = "opayque.admin.status.update", description = "Throughput and latency of administrative account state changes")
     @Transactional
     public Account updateAccountStatus(String adminEmail, UUID targetAccountId, AccountStatus newStatus) {
         // 1. Identity Resolution (Fixes the UUID vs Email conflict cleanly)
@@ -117,6 +119,7 @@ public class AdminWalletService {
      * @param request The deposit details (Amount, Currency, Description).
      * @return The resulting immutable LedgerEntry.
      */
+    @Timed(value = "opayque.admin.money.deposit", description = "Throughput and latency of administrative manual fund injections")
     @Transactional
     public LedgerEntry depositFunds(String adminEmail, UUID targetAccountId, MoneyDepositRequest request) {
         // 1. Identity Resolution & Governance

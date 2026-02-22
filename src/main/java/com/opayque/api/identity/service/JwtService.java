@@ -5,6 +5,7 @@ import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.auth0.jwt.interfaces.JWTVerifier;
+import io.micrometer.core.annotation.Timed;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -62,6 +63,7 @@ public class JwtService {
     /// @param email The user's unique identifier (Subject).
     /// @param role The user's role (RBAC Claim).
     /// @return A URL-safe JWT string.
+    @Timed(value = "opayque.auth.jwt.generate", description = "Latency of cryptographic JWT signing")
     public String generateToken(String email, String role) {
         return JWT.create()
                 .withSubject(email)

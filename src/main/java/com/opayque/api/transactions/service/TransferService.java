@@ -8,6 +8,7 @@ import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.service.AccountService;
 import com.opayque.api.wallet.service.LedgerService;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -85,6 +86,7 @@ public class TransferService {
      * @throws InsufficientFundsException when sender's available balance < amount
      * @throws IllegalStateException      on data integrity violation (orphaned account)
      */
+    @Timed(value = "opayque.transfer.funds", description = "End-to-end duration of atomic fund transfers")
     public UUID transferFunds(UUID senderId, String receiverEmail, String amountStr, String currency, String idempotencyKey) {
         // 2. LOCK: Fail Fast if duplicate
         idempotencyService.lock(idempotencyKey);

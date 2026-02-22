@@ -238,13 +238,12 @@ class CardTransactionIntegrationTest {
         ));
 
         // 5. ISSUE GOLDEN CARD (Active, €5k Limit)
-        // CRITICAL: We must manually encrypt secrets because we are bypassing the Service layer
-        // in setup to simulate "Existing Data".
+        // CRITICAL: Pass plaintext! Hibernate's @Converter will encrypt it automatically.
         goldenCard = virtualCardRepository.saveAndFlush(VirtualCard.builder()
                 .account(goldenWallet)
-                .pan(rawPan) // Entity handles Blind Indexing
-                .cvv(attributeEncryptor.convertToDatabaseColumn(RAW_CVV)) // Manually Encrypt
-                .expiryDate(attributeEncryptor.convertToDatabaseColumn(RAW_EXPIRY)) // Manually Encrypt
+                .pan(rawPan)
+                .cvv(RAW_CVV) // Removed attributeEncryptor
+                .expiryDate(RAW_EXPIRY) // Removed attributeEncryptor
                 .cardholderName("VIP User")
                 .status(CardStatus.ACTIVE)
                 .monthlyLimit(new BigDecimal("5000.00"))
@@ -396,8 +395,8 @@ class CardTransactionIntegrationTest {
         virtualCardRepository.saveAndFlush(VirtualCard.builder()
                 .account(poorWallet)
                 .pan(poorPan)
-                .cvv(attributeEncryptor.convertToDatabaseColumn("123"))
-                .expiryDate(attributeEncryptor.convertToDatabaseColumn("12/30"))
+                .cvv("123") // Removed attributeEncryptor
+                .expiryDate("12/30") // Removed attributeEncryptor
                 .status(CardStatus.ACTIVE)
                 .monthlyLimit(new BigDecimal("1000.00"))
                 .cardholderName("Broke User")
@@ -525,8 +524,8 @@ class CardTransactionIntegrationTest {
         virtualCardRepository.saveAndFlush(VirtualCard.builder()
                 .account(goldenWallet) // Same wallet is fine
                 .pan(frozenPan)
-                .cvv(attributeEncryptor.convertToDatabaseColumn(RAW_CVV))
-                .expiryDate(attributeEncryptor.convertToDatabaseColumn(RAW_EXPIRY))
+                .cvv(RAW_CVV) // Removed attributeEncryptor
+                .expiryDate(RAW_EXPIRY) // Removed attributeEncryptor
                 .cardholderName("VIP User")
                 .status(CardStatus.FROZEN) // <--- THE BLOCKER
                 .monthlyLimit(new BigDecimal("5000.00"))

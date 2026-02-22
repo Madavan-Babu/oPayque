@@ -202,6 +202,12 @@ class StatementIntegrationTest {
      */
     @BeforeEach
     void setUp() {
+        // 0. FLUSH INFRASTRUCTURE (The "Clean Room")
+        // Wipes any Liquibase-seeded data so the very first test doesn't hit a Unique Constraint violation.
+        ledgerRepository.deleteAll();
+        accountRepository.deleteAll();
+        userRepository.deleteAll();
+
         // 1. Setup Owner (Role.CUSTOMER)
         owner = User.builder()
                 .fullName("Statement Owner") // Added mandatory field

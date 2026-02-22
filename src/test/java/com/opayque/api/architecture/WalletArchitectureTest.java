@@ -19,6 +19,7 @@ import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.sli
 /// (Wallet Domain) remains isolated, follows strict layering, and adheres to
 /// mandatory banking-grade precision standards.
 @AnalyzeClasses(packages = "com.opayque.api", importOptions = ImportOption.DoNotIncludeTests.class)
+@SuppressWarnings("unused")
 public class WalletArchitectureTest {
 
     /// Pillar 1: Domain Isolation.
@@ -46,7 +47,8 @@ public class WalletArchitectureTest {
                     "org.joda.money..",           // Approved Financial Library (Story 2.1)
                     "org.hibernate.annotations..",// Approved Persistence Annotations (@Immutable)
                     "io.github.resilience4j..",    // Approved Circuit Breaker (Story 2.3)
-                    "org.hibernate.proxy.." // THE FIX: Allow Hibernate Proxies (ByteBuddy)
+                    "org.hibernate.proxy..", // THE FIX: Allow Hibernate Proxies (ByteBuddy)
+                    "io.micrometer.."
             ).because("The Wallet Domain must be isolated from Identity web logic, but allowed to use approved infrastructure libraries.");
 
     /// Pillar 2: Layered Architecture Enforcement.

@@ -1,6 +1,7 @@
 package com.opayque.api.infrastructure.ratelimit;
 
 import com.opayque.api.infrastructure.exception.RateLimitExceededException;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -55,6 +56,7 @@ public class RateLimiterService {
      * @throws RateLimitExceededException if the user has exceeded the
      *         transfer throttle threshold within the current 60-second window.
      */
+    @Timed(value = "opayque.ratelimit.check", description = "Latency of Redis-backed atomic velocity checks")
     public void checkLimit(String userId) {
         checkLimit(userId, "transfers", LIMIT_TRANSFERS);
     }

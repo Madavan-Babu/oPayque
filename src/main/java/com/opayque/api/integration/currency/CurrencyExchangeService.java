@@ -4,6 +4,7 @@ import com.opayque.api.infrastructure.exception.ServiceUnavailableException;
 import com.opayque.api.integration.currency.dto.ExchangeRateResponse;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -55,6 +56,7 @@ public class CurrencyExchangeService {
     /// @return The conversion rate as a [BigDecimal].
     /// @throws ServiceUnavailableException If the circuit is open or external provider is down.
     /// @throws IllegalArgumentException If an unsupported currency is requested.
+    @Timed(value = "opayque.exchange.api.latency", description = "Early warning tracker for third-party Forex provider delays")
     @Cacheable(value = "exchange_rates", key = "#from + '-' + #to")
     public BigDecimal getRate(String from, String to) {
         if (from.equals(to)) {

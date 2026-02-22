@@ -210,11 +210,12 @@ class CardTransactionContentionStressTest {
         ));
 
         // Create Card (Active)
+        // CRITICAL: Pass plaintext! Hibernate's @Converter will encrypt it automatically.
         stressCard = virtualCardRepository.saveAndFlush(VirtualCard.builder()
                 .account(stressWallet)
                 .pan(rawPan)
-                .cvv(attributeEncryptor.convertToDatabaseColumn(RAW_CVV))
-                .expiryDate(attributeEncryptor.convertToDatabaseColumn(RAW_EXPIRY))
+                .cvv(RAW_CVV) // Removed attributeEncryptor
+                .expiryDate(RAW_EXPIRY) // Removed attributeEncryptor
                 .cardholderName("Stress User")
                 .status(CardStatus.ACTIVE)
                 .monthlyLimit(new BigDecimal("50000.00")) // Default High Limit

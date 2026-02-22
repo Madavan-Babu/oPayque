@@ -6,6 +6,7 @@ import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.wallet.entity.Account;
 import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.repository.AccountRepository;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
@@ -44,6 +45,7 @@ public class AccountService {
     /// @param currencyCode The ISO 4217 currency code for the target wallet territory.
     /// @return The persisted [Account] entity representing the new wallet.
     /// @throws IllegalArgumentException If the user identity cannot be resolved.
+    @Timed(value = "opayque.wallet.create.email", description = "Throughput of wallet creation via email identifier")
     @Transactional
     public Account createAccount(String userEmail, String currencyCode) {
         log.info("Request to create wallet. UserEmail: [{}], Currency: [{}]", userEmail, currencyCode);
@@ -68,6 +70,7 @@ public class AccountService {
     /// @param currencyCode The ISO 4217 currency code for the target wallet territory.
     /// @return The persisted [Account] entity representing the new wallet.
     /// @throws IllegalArgumentException If the user identity cannot be resolved by ID.
+    @Timed(value = "opayque.wallet.create.uuid", description = "Throughput of wallet creation via internal UUID")
     @Transactional
     public Account createAccount(UUID userId, String currencyCode) {
         log.info("Request to create wallet. UserID: [{}], Currency: [{}]", userId, currencyCode);

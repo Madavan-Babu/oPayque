@@ -1,5 +1,6 @@
 package com.opayque.api.identity.service;
 
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -50,6 +51,7 @@ public class TokenBlocklistService {
     ///
     /// @param signature The JWT signature to verify.
     /// @return true if the signature is present (blocked), false if valid.
+    @Timed(value = "opayque.auth.blocklist.check", description = "Performance of Redis lookups for revoked tokens")
     public boolean isBlocked(String signature) {
         String key = KEY_PREFIX + signature;
         return Boolean.TRUE.equals(redisTemplate.hasKey(key));

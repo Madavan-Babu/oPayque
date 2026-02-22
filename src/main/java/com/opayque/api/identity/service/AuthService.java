@@ -13,6 +13,7 @@ import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.infrastructure.exception.TokenRevokedException;
 import com.opayque.api.infrastructure.exception.UserAlreadyExistsException;
 import com.opayque.api.infrastructure.exception.UserNotFoundException;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -90,6 +91,7 @@ public class AuthService {
     /// @param request The user's login credentials.
     /// @return A response containing the JWT and the opaque refresh token.
     /// @throws UserNotFoundException If identity lookup fails post-authentication.
+    @Timed(value = "opayque.auth.login", description = "Performance of user authentication and token issuance")
     public LoginResponse login(LoginRequest request) {
         log.info("Authenticating user: {}", request.email());
 

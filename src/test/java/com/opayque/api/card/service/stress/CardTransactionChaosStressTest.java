@@ -213,11 +213,12 @@ class CardTransactionChaosStressTest {
         ));
 
         // 2. Issue Card
+        // CRITICAL: Pass plaintext! Hibernate's @Converter will encrypt it automatically.
         chaosCard = virtualCardRepository.saveAndFlush(VirtualCard.builder()
                 .account(chaosWallet)
                 .pan(rawPan)
-                .cvv(attributeEncryptor.convertToDatabaseColumn(RAW_CVV))
-                .expiryDate(attributeEncryptor.convertToDatabaseColumn(RAW_EXPIRY))
+                .cvv(RAW_CVV) // Removed attributeEncryptor
+                .expiryDate(RAW_EXPIRY) // Removed attributeEncryptor
                 .cardholderName("Chaos User")
                 .status(CardStatus.ACTIVE)
                 .monthlyLimit(new BigDecimal("50000.00"))

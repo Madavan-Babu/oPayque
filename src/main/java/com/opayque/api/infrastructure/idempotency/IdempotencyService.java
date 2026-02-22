@@ -2,6 +2,7 @@ package com.opayque.api.infrastructure.idempotency;
 
 import com.opayque.api.infrastructure.exception.IdempotencyException;
 import com.opayque.api.infrastructure.exception.ServiceUnavailableException;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.QueryTimeoutException;
@@ -123,6 +124,7 @@ public class IdempotencyService {
      * Includes contextual logging to distinguish between active collisions
      * and completed transaction replays.
      */
+    @Timed(value = "opayque.idempotency.lock", description = "Overhead of Redis-backed idempotency lock acquisition")
     public boolean lock(String key) {
         try {
             check(key); // Re-uses the re-entrancy logic

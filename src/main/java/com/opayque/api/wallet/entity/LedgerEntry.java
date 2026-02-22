@@ -85,7 +85,7 @@ public class LedgerEntry {
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal amount;
 
-    /// The ISO 4217 currency code for the `amount` field (e.g., "USD", "EUR").
+    /// The ISO 4217 currency code for the `amount` field (e.g., "GBP", "EUR").
     @Column(nullable = false, length = 3)
     private String currency;
 
