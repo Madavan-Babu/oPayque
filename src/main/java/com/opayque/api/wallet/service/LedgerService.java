@@ -7,6 +7,7 @@ import com.opayque.api.wallet.entity.LedgerEntry;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.repository.AccountRepository;
 import com.opayque.api.wallet.repository.LedgerRepository;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.joda.money.BigMoney;
@@ -74,6 +75,7 @@ public class LedgerService {
      * @see Account
      * @see CurrencyExchangeService
      */
+    @Timed(value = "opayque.ledger.record.entry", description = "Time taken to execute pessimistic locking and persist ledger entry")
     @Transactional
     @Retryable(
             retryFor = { ObjectOptimisticLockingFailureException.class },
@@ -167,6 +169,7 @@ public class LedgerService {
      * @see LedgerEntry
      * @see LedgerRepository
      */
+    @Timed(value = "opayque.ledger.calculate.balance", description = "Performance of zero-sum aggregation query")
     @Transactional(readOnly = true)
     public BigDecimal calculateBalance(java.util.UUID accountId) {
         BigDecimal balance = ledgerRepository.getBalance(accountId);

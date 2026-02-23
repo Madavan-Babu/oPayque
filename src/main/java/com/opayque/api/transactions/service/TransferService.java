@@ -4,9 +4,11 @@ import com.opayque.api.infrastructure.exception.InsufficientFundsException;
 import com.opayque.api.infrastructure.idempotency.IdempotencyService;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
 import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.service.AccountService;
 import com.opayque.api.wallet.service.LedgerService;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -17,16 +19,29 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Core settlement service for peer-to-peer (P2P) wallet transfers.
+ * Service that atomically transfers funds between two wallets denominated in the same
+ * currency while enforcing business rules and guaranteeing idempotent execution.
  * <p>
- * Guarantees exactly-once execution via deterministic idempotency keys,
- * double-entry ledger integrity, and pessimistic balance validation.
- * All operations are ACID within a single {@link Transactional} boundary.
+ * It performs the following responsibilities:
+ * <ul>
+ *   <li>Validates pre‑conditions such as distinct users, positive amount, and existing wallets.</li>
+ *   <li>Applies a pessimistic lock on the sender account via {@link AccountService}
+ *       to serialize concurrent debits.</li>
+ *   <li>Calculates the sender's available balance using {@link LedgerService} and
+ *       ensures sufficient funds.</li>
+ *   <li>Creates paired immutable ledger entries (debit and credit) with a common
+ *       {@code transferId} to provide an auditable double‑entry record.</li>
+ *   <li>Utilises {@link IdempotencyService} to lock, track and complete the operation,
+ *       preventing duplicate credits/debits on retries or message redelivery.</li>
+ * </ul>
  * </p>
- * <p>
- * Thread-safe under the assumption that {@link AccountService#getAccountById}
- * acquires row-level locks on the account record.
- * </p>
+ *
+ * @author Madavan Babu
+ * @since 2026
+ *
+ * @see AccountService
+ * @see LedgerService
+ * @see IdempotencyService
  */
 @Service
 @RequiredArgsConstructor
@@ -71,6 +86,7 @@ public class TransferService {
      * @throws InsufficientFundsException when sender's available balance < amount
      * @throws IllegalStateException      on data integrity violation (orphaned account)
      */
+    @Timed(value = "opayque.transfer.funds", description = "End-to-end duration of atomic fund transfers")
     public UUID transferFunds(UUID senderId, String receiverEmail, String amountStr, String currency, String idempotencyKey) {
         // 2. LOCK: Fail Fast if duplicate
         idempotencyService.lock(idempotencyKey);
@@ -88,6 +104,12 @@ public class TransferService {
 
             // Acquire pessimistic lock on sender wallet to serialize concurrent debits
             Account senderAccount = accountService.getAccountForUpdate(senderId); // Forces the lock
+
+            // NEW GUARDRAIL (EPIC 5)
+            if (senderAccount.getStatus() != AccountStatus.ACTIVE) {
+                log.warn("Transfer Rejected: Account [{}] is {}", senderId, senderAccount.getStatus());
+                throw new IllegalStateException("Account is currently " + senderAccount.getStatus());
+            }
 
             // Locate beneficiary wallet; reject if currency corridor unavailable
             List<Account> receiverAccounts = accountService.getAccountsForUser(receiverEmail);

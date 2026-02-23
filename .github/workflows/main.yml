@@ -7,19 +7,12 @@ on:
     branches: [ main ]
 
 jobs:
+  # ==========================================
+  # JOB 1: BUILD & VERIFY (Runs on every push)
+  # ==========================================
   build-and-verify:
     runs-on: ubuntu-latest
-
     services:
-      # --- PERSISTENCE LAYER: POSTGRESQL ---
-      # --- REMOVED POSTGRES SERVICE ---
-      # Reason: Optimization.
-      # 1. Unit Tests use H2 (application-test.yaml).
-      # 2. Integration Tests use Testcontainers (Self-managed).
-      # This saves ~300MB RAM to prevent OOM Kills during the Stress Test.
-
-
-      # --- CACHE LAYER: REDIS ---
       redis:
         image: redis:7-alpine
         ports:
@@ -42,34 +35,65 @@ jobs:
           cache: 'maven'
 
       - name: Build and Verify with Maven
-        # Note: 'verify' lifecycle includes unit, integration, and archunit tests
         run: mvn --batch-mode --update-snapshots verify
         env:
-          # --- REMOVED DATABASE OVERRIDES HERE ---
-          # We deleted SPRING_DATASOURCE_* and SPRING_JPA_* vars.
-          # This allows 'application-test.yaml' (H2) to work for unit tests,
-          # while 'LedgerStressTest' (Postgres) sets its own config dynamically.
-
-          # --- 1. GLOBAL PROFILE FORCE ---
-          # This forces ALL tests to use 'application-test.yaml' (H2) by default.
-          # It prevents them from falling back to 'dev' (Postgres) and crashing on empty DBs.
           SPRING_PROFILES_ACTIVE: test
-
-          # --- REDIS CONFIGURATION (CI OVERRIDES) ---
-          # Injects localhost mapping for the Redis service container
           SPRING_DATA_REDIS_HOST: localhost
           SPRING_DATA_REDIS_PORT: 6379
-
-          # --- SECRETS ---
-          # FIX: Added this back to guarantee Spring Security startup
           JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY || 'v3ry-s3cr3t-b4nk-gr4d3-k3y-th4t-sh0uld-b3-v3ry-l0ng' }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
 
-  # --- VERSION MANAGEMENT JOB ---
-  manage-version:
+  # ==========================================
+  # JOB 2: PUBLISH TO AWS ECR (Runs ONLY on Main)
+  # ==========================================
+  publish-to-ecr:
     needs: build-and-verify
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    # STRICT GATE: Only run if we are merging/pushing to the 'main' branch
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-2
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: opayque-api
+          # We tag the image with 'latest' AND the specific Git commit hash for traceability
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # 1. Build the Docker image using your highly optimized Dockerfile
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          
+          # 2. Push to your private AWS vault
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+  # ==========================================
+  # JOB 3: MANAGE VERSION (Runs last)
+  # ==========================================
+  manage-version:
+    needs: [build-and-verify, publish-to-ecr]
+    runs-on: ubuntu-latest
+    # COMPLEX GATE: Run if build succeeded, AND ECR was either successful (main) or skipped (feature)
+    if: |
+      always() && 
+      github.event_name == 'push' &&
+      needs.build-and-verify.result == 'success' && 
+      (needs.publish-to-ecr.result == 'success' || needs.publish-to-ecr.result == 'skipped')
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4

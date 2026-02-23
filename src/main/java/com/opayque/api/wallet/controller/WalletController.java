@@ -4,6 +4,7 @@ import com.opayque.api.wallet.dto.AccountResponse;
 import com.opayque.api.wallet.dto.CreateAccountRequest;
 import com.opayque.api.wallet.dto.WalletSummary;
 import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.service.AccountService;
 import com.opayque.api.wallet.service.LedgerService;
 import jakarta.validation.Valid;
@@ -122,6 +123,50 @@ public class WalletController {
 
         // 3. Safe to proceed
         return ResponseEntity.ok(ledgerService.calculateBalance(id));
+    }
+
+    // =========================================================================
+    // EPIC 5: LIFECYCLE MANAGEMENT
+    // =========================================================================
+
+    /**
+     * Soft-deletes a user's wallet.
+     * <p>
+     * This endpoint performs a "Customer-Initiated Closure". It enforces strict ownership
+     * checks (BOLA) before transitioning the account state to {@code CLOSED}.
+     * Once closed, the account cannot be used for transactions, but the ledger history
+     * remains intact for audit purposes.
+     *
+     * @param id The UUID of the wallet to close.
+     * @param authentication The security context from the JWT.
+     * @return 204 No Content on success.
+     * @throws AccessDeniedException If the user does not own the wallet.
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> closeAccount(
+            @PathVariable UUID id,
+            Authentication authentication
+    ) {
+        String requesterEmail = authentication.getName();
+        log.info("Lifecycle: Request to CLOSE Wallet [{}]. Requester: [{}]", id, requesterEmail);
+
+        // 1. Fetch Account Metadata (Uses existing Service method)
+        Account targetAccount = accountService.getAccountById(id);
+
+        // 2. IDOR/BOLA Check: Strict Ownership Verification
+        // (Consistency: Matches logic in getBalance endpoint)
+        if (!targetAccount.getUser().getEmail().equals(requesterEmail)) {
+            log.warn("Security Alert: BOLA Violation. User [{}] tried to CLOSE Wallet [{}] owned by [{}]",
+                    requesterEmail, id, targetAccount.getUser().getEmail());
+            throw new AccessDeniedException("Access Denied: You do not own this wallet.");
+        }
+
+        // 3. Execute State Transition
+        // We pass 'false' for isAdmin, as this is a user-initiated action.
+        accountService.updateAccountStatus(id, AccountStatus.CLOSED, false);
+
+        // 4. Response: 204 No Content (Standard for DELETE operations)
+        return ResponseEntity.noContent().build();
     }
 
 }

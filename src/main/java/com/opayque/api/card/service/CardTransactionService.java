@@ -12,8 +12,10 @@ import com.opayque.api.infrastructure.exception.IdempotencyException;
 import com.opayque.api.infrastructure.idempotency.IdempotencyService;
 import com.opayque.api.infrastructure.ratelimit.RateLimiterService;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.service.LedgerService;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
@@ -109,6 +111,7 @@ public class CardTransactionService {
      * @see LedgerService
      * @see IdempotencyService
      */
+    @Timed(value = "opayque.card.transaction.process", description = "Speed of card transaction orchestration, including limits and decryption")
     @Transactional(noRollbackFor = {BadCredentialsException.class, AccessDeniedException.class})
     public CardTransactionResponse processTransaction(CardTransactionRequest request) {
         String idempotencyKey = "txn:" + request.getExternalTransactionId();
@@ -133,6 +136,13 @@ public class CardTransactionService {
                         log.warn("Card Not Found (Invalid PAN) | ExtID: {}", request.getExternalTransactionId());
                         return new BadCredentialsException("Invalid PAN or Card not found");
                     });
+
+            // NEW GUARDRAIL (NEW EPIC 5)
+            if (card.getAccount().getStatus() != AccountStatus.ACTIVE) {
+                log.warn("Card Transaction Rejected: Underlying Account is {} | CardID: {}",
+                        card.getAccount().getStatus(), card.getId());
+                throw new AccessDeniedException("Linked account is " + card.getAccount().getStatus());
+            }
 
             cardId = card.getId(); // FIX: Capture ID for potential rollback
 
@@ -234,15 +244,14 @@ public class CardTransactionService {
      * @see CardTransactionService#processTransaction(CardTransactionRequest)
      */
     private void validateCardSecurity(VirtualCard card, CardTransactionRequest request) {
-        String decryptedCvv = attributeEncryptor.convertToEntityAttribute(card.getCvv());
-        String decryptedExpiry = attributeEncryptor.convertToEntityAttribute(card.getExpiryDate());
+        // CORRECT: card.getCvv() and card.getExpiryDate() are ALREADY decrypted by Hibernate
 
-        if (!decryptedCvv.equals(request.getCvv())) {
+        if (!card.getCvv().equals(request.getCvv())) {
             log.warn("Security Alert: Invalid CVV | CardID: {}", card.getId());
             throw new BadCredentialsException("Invalid CVV");
         }
 
-        if (!decryptedExpiry.equals(request.getExpiryDate())) {
+        if (!card.getExpiryDate().equals(request.getExpiryDate())) {
             log.warn("Security Alert: Invalid Expiry | CardID: {}", card.getId());
             throw new BadCredentialsException("Invalid Expiry Date");
         }

@@ -4,9 +4,12 @@ import com.opayque.api.wallet.controller.WalletController;
 import com.opayque.api.identity.entity.User;
 import com.opayque.api.identity.repository.UserRepository;
 import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.repository.AccountRepository;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,6 +45,7 @@ public class AccountService {
     /// @param currencyCode The ISO 4217 currency code for the target wallet territory.
     /// @return The persisted [Account] entity representing the new wallet.
     /// @throws IllegalArgumentException If the user identity cannot be resolved.
+    @Timed(value = "opayque.wallet.create.email", description = "Throughput of wallet creation via email identifier")
     @Transactional
     public Account createAccount(String userEmail, String currencyCode) {
         log.info("Request to create wallet. UserEmail: [{}], Currency: [{}]", userEmail, currencyCode);
@@ -66,6 +70,7 @@ public class AccountService {
     /// @param currencyCode The ISO 4217 currency code for the target wallet territory.
     /// @return The persisted [Account] entity representing the new wallet.
     /// @throws IllegalArgumentException If the user identity cannot be resolved by ID.
+    @Timed(value = "opayque.wallet.create.uuid", description = "Throughput of wallet creation via internal UUID")
     @Transactional
     public Account createAccount(UUID userId, String currencyCode) {
         log.info("Request to create wallet. UserID: [{}], Currency: [{}]", userId, currencyCode);
@@ -206,5 +211,67 @@ public class AccountService {
                     log.error("Wallet lookup failed. User [{}] has no [{}] account.", owner.getId(), currencyCode);
                     return new IllegalArgumentException("No " + currencyCode + " wallet found for user");
                 });
+    }
+
+    // =========================================================================
+    // EPIC 5: ACCOUNT LIFECYCLE MANAGEMENT (ADDITIVE EXTENSION)
+    // =========================================================================
+
+    /**
+     * Updates the status of an account following strict state-machine and RBAC rules.
+     * <p>
+     * This method acts as the central governance point for Account lifecycle changes.
+     * It enforces two layers of protection:
+     * <ol>
+     * <li><b>State Machine:</b> Ensures transitions (e.g., CLOSED -> ACTIVE) are impossible.</li>
+     * <li><b>Privilege Check:</b> Ensures only Admins can perform sensitive actions like Freezing.</li>
+     * </ol>
+     *
+     * @param accountId  The UUID of the target wallet.
+     * @param newStatus  The desired target state (FROZEN, CLOSED, etc.).
+     * @param isAdmin    Internal flag indicating if the caller holds ROLE_ADMIN.
+     * @return The updated Account entity.
+     * @throws IllegalArgumentException if the account does not exist.
+     * @throws IllegalStateException    if the state transition is invalid.
+     * @throws AccessDeniedException    if a non-admin attempts a privileged transition.
+     */
+    @Transactional
+    public Account updateAccountStatus(UUID accountId, AccountStatus newStatus, boolean isAdmin) {
+        log.info("Lifecycle Request: Account [{}] -> [{}] | Admin: {}", accountId, newStatus, isAdmin);
+
+        // 1. Fetch Account (Pessimistic Lock not strictly required here as status changes are rare/admin-driven)
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new IllegalArgumentException("Account not found"));
+
+        // 2. State Machine Validation (The "Gatekeeper")
+        if (!account.getStatus().canTransitionTo(newStatus)) {
+            log.warn("Illegal State Transition: [{}] -> [{}] for Account [{}]",
+                    account.getStatus(), newStatus, accountId);
+            throw new IllegalStateException(
+                    String.format("Cannot transition account from %s to %s", account.getStatus(), newStatus)
+            );
+        }
+
+        // 3. Security Guardrails (The "Bouncer")
+        // Rule A: Only Admins can FREEZE an account.
+        if (newStatus == AccountStatus.FROZEN && !isAdmin) {
+            log.warn("Security Alert: Unauthorized Freeze attempt on Account [{}]", accountId);
+            throw new AccessDeniedException("Only Administrators can freeze accounts.");
+        }
+
+        // Rule B: Only Admins can UNFREEZE (ACTIVE) a previously frozen account.
+        if (account.getStatus() == AccountStatus.FROZEN && newStatus == AccountStatus.ACTIVE && !isAdmin) {
+            log.warn("Security Alert: Unauthorized Unfreeze attempt on Account [{}]", accountId);
+            throw new AccessDeniedException("Only Administrators can unfreeze accounts.");
+        }
+
+        // 4. Apply & Persist
+        account.setStatus(newStatus);
+        Account updated = accountRepository.save(account);
+
+        log.info("Account Status Updated: ID=[{}] | Old=[{}] | New=[{}]",
+                accountId, account.getStatus(), newStatus);
+
+        return updated;
     }
 }

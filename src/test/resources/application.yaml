@@ -1,0 +1,5 @@
+# This file ONLY runs during tests (src/test/resources/application.yaml)
+# Its only job is to force Spring Boot to load application-test.yaml
+spring:
+  profiles:
+    active: test

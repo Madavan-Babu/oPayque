@@ -9,6 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.serializer.RedisSerializer;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -81,6 +82,7 @@ import static org.mockito.Mockito.*;
  * @see com.opayque.api.card.repository.VirtualCardRepository
  */
 @ExtendWith(MockitoExtension.class)
+@ActiveProfiles("test")
 @SuppressWarnings("unchecked, unused")
 class CardLimitServicePropertyTest {
 

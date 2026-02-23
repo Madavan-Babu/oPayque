@@ -31,7 +31,7 @@ public class CurrencyValidator implements ConstraintValidator<ValidCurrency, Str
     /// 2. Exact Match: Performs a case-sensitive check against the ISO_CODES registry
     ///    to adhere to the strict requirements of Story 2.2.
     ///
-    /// @param value The currency code string (e.g., "USD", "EUR").
+    /// @param value The currency code string (e.g., "GBP", "EUR").
     /// @param context The validation context.
     /// @return true if the code is a valid ISO 4217 identifier; false otherwise.
     @Override

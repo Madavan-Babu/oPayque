@@ -5,6 +5,7 @@ import com.opayque.api.card.repository.VirtualCardRepository;
 import com.opayque.api.card.util.LuhnAlgorithm;
 import com.opayque.api.infrastructure.config.OpayqueCardProperties;
 import com.opayque.api.infrastructure.encryption.AttributeEncryptor;
+import io.micrometer.core.annotation.Timed;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -73,6 +74,7 @@ public class CardGeneratorService {
      *
      * @return sealed card secrets ready for tokenization; never persisted in plaintext.
      */
+    @Timed(value = "opayque.card.generate", description = "Latency of virtual card manufacturing (PAN, CVV, Expiry)")
     @Transactional(readOnly = true)
     public CardSecrets generateCard() {
         String pan = generateUniquePan();

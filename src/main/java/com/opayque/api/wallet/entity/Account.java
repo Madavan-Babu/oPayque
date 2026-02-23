@@ -39,4 +39,10 @@ public class Account {
     /// Adheres to ISO 13616 standards with a maximum length of 34 characters.
     @Column(nullable = false, unique = true, length = 34)
     private String iban;
+
+    //NEW EPIC 5
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    @Builder.Default
+    private AccountStatus status = AccountStatus.ACTIVE;
 }

@@ -1,6 +1,6 @@
 spring:
   profiles:
-    active: dev # Default for local coding
+    default: dev # Default for local coding
   application:
     name: oPayque-API
 
@@ -50,14 +50,17 @@ application:
   integration:
     exchange-rate:
       base-url: https://v6.exchangerate-api.com/v6
-      api-key: ${EXCHANGE_RATE_API_KEY:dummy-key}
+      api-key: ${EXCHANGE_RATE_API_KEY}
   security:
     jwt:
       # Use a 64-character hex string in production! (REMEMBER TO CHANGE THIS!)
-      secret-key: ${JWT_SECRET_KEY:v3ry-s3cr3t-b4nk-gr4d3-k3y-th4t-sh0uld-b3-v3ry-l0ng}
+      secret-key: ${JWT_SECRET_KEY}
       expiration: 900000 # 15 mins
       refresh-token:
         expiration: 604800000 # 7 Days (milliseconds)
+    admin:
+      email: ${ADMIN_EMAIL}
+      password: ${ADMIN_PASSWORD}
 
 # =========================================================================
 #                        EPIC 4: ENCRYPTION VAULT
@@ -75,12 +78,27 @@ opayque:
     # 3. Restart. (Old data decrypts with v1, new writes use v2).
     active-version: 1
     keys:
-      1: ${ENCRYPTION_KEY_V1:MySuperSecretKeyForEncryptionV1!!}
+      1: ${ENCRYPTION_KEY_V1}
 
     # HMAC Key (Blind Indexing) - Stays single for now (Harder to rotate)
-    hashing-key: ${HASHING_KEY:MySuperSecretKeyForhashing!!}
+    hashing-key: ${HASHING_KEY}
 
   # Story 4.2 Card Factory Configuration
   card:
     bin-prefix: "171103"
     expiry-years: 3
+
+# =========================================================================
+#                        EPIC 5: OBSERVABILITY & METRICS
+# =========================================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always # Shows detailed DB and custom health statuses
+  metrics:
+    tags:
+      application: oPayque-API # Tags all exported metrics with your app name

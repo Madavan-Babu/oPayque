@@ -104,7 +104,8 @@ public class SecurityConfig {
 
                         // User Profiles & Admin
                         .requestMatchers("/api/v1/users/**").authenticated()
-                        .requestMatchers("/api/v1/admin/**").authenticated()
+                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/actuator/**").hasRole("ADMIN") // Actuator endpoints only for ADMIN access
                         .requestMatchers("/api/v1/demo/**").authenticated()
 
                         // =====================================================================

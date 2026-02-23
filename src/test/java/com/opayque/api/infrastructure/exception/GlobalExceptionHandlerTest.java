@@ -250,4 +250,48 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().message())
                 .contains("type 'unknown'");
     }
+
+    /// Validates that I/O failures—such as the "Subway Commuter" broken pipe—are
+    /// correctly captured and mapped to a 503 status with the 'STREAM_INTERRUPTED' code.
+    @Test
+    @DisplayName("Unit: Should handle IOException and return STREAM_INTERRUPTED")
+    void shouldHandleIOException() {
+        // 1. Arrange
+        // Simulating the "Subway Commuter" vector where the peer resets the connection
+        java.io.IOException ex = new java.io.IOException("Connection reset by peer");
+
+        // 2. Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleIOException(ex, webRequest);
+
+        // 3. Assert
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode()); //
+
+        ErrorResponse body = response.getBody();
+        assertNotNull(body);
+        assertEquals("STREAM_INTERRUPTED", body.code()); //
+
+        // Match the exact client-facing message defined in the handler
+        assertThat(body.message())
+                .isEqualTo("The file download stream was interrupted.");
+
+        assertEquals("/test/path", body.path()); // Verify audit metadata preservation
+    }
+
+    /// Robustness Check: Ensures the handler manages null messages and
+    /// consistently returns the 'STREAM_INTERRUPTED' code.
+    @Test
+    @DisplayName("Unit: Should handle IOException with null message and return STREAM_INTERRUPTED")
+    void shouldHandleIOException_WithNullMessage() {
+        // 1. Arrange
+        java.io.IOException ex = new java.io.IOException((String) null);
+
+        // 2. Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleIOException(ex, webRequest);
+
+        // 3. Assert
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals("STREAM_INTERRUPTED", response.getBody().code());
+    }
+
 }

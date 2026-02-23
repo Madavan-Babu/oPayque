@@ -36,10 +36,14 @@ application:
   security:
     jwt:
       # Use a 64-character hex string in production! (REMEMBER TO CHANGE THIS!)
-      secret-key: ${JWT_SECRET_KEY:v3ry-s3cr3t-b4nk-gr4d3-k3y-th4t-sh0uld-b3-v3ry-l0ng}
+      secret-key: v3ry-s3cr3t-b4nk-gr4d3-k3y-th4t-sh0uld-b3-v3ry-l0ng
       expiration: 900000 # 15 mins
       refresh-token:
         expiration: 604800000 # 7 Days (milliseconds)
+    # FIXED: Added the missing admin credentials for tests
+    admin:
+      email: admin@opayque.com
+      password: Admin@1234
 
 
 # =========================================================================
@@ -52,3 +56,6 @@ opayque:
     keys:
       1: TestKeyV1_For_Integration_Testing_12345
     hashing-key: TestHashingKey_For_Blind_Index_12345
+  card:
+    bin-prefix: "171103"
+    expiry-years: 3

@@ -322,8 +322,7 @@ class CardTransactionExhaustionStressTest {
         botnetPans = new ArrayList<>(BOTNET_SIZE);
         List<VirtualCard> batch = new ArrayList<>(BOTNET_SIZE);
 
-        String encCvv = attributeEncryptor.convertToDatabaseColumn(RAW_CVV);
-        String encExpiry = attributeEncryptor.convertToDatabaseColumn(RAW_EXPIRY);
+        // REMOVED: encCvv and encExpiry manual encryption variables!
 
         for (int i = 0; i < BOTNET_SIZE; i++) {
             // Generate valid luhn-ish suffix (simplified for stress)
@@ -334,8 +333,9 @@ class CardTransactionExhaustionStressTest {
             batch.add(VirtualCard.builder()
                     .account(stressWallet)
                     .pan(pan)
-                    .cvv(encCvv)
-                    .expiryDate(encExpiry)
+                    // CRITICAL: Pass plaintext! Hibernate handles encryption on saveAllAndFlush.
+                    .cvv(RAW_CVV)
+                    .expiryDate(RAW_EXPIRY)
                     .cardholderName("Bot-" + i)
                     .status(CardStatus.ACTIVE)
                     .monthlyLimit(new BigDecimal("10000.00"))

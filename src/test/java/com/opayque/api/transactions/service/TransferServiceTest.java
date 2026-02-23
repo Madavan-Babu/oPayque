@@ -5,6 +5,7 @@ import com.opayque.api.infrastructure.exception.InsufficientFundsException;
 import com.opayque.api.infrastructure.idempotency.IdempotencyService;
 import com.opayque.api.wallet.dto.CreateLedgerEntryRequest;
 import com.opayque.api.wallet.entity.Account;
+import com.opayque.api.wallet.entity.AccountStatus;
 import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.service.AccountService;
 import com.opayque.api.wallet.service.LedgerService;
@@ -296,4 +297,75 @@ class TransferServiceTest {
                 .hasMessage("Account data integrity violation.");
         verify(idempotencyService).lock("unit-test-key"); // Verify interaction
     }
+
+    // =========================================================================
+    // EPIC 5: ACCOUNT STATUS GUARDRAIL TESTS
+    // =========================================================================
+
+    /**
+     * Validates that the "Kill-Switch" immediately halts a transfer.
+     * <p>
+     * Even if the user has sufficient funds, a {@code FROZEN} status must
+     * trigger an {@link IllegalStateException} before any money is moved.
+     * This ensures that funds are legally locked down.
+     */
+    @Test
+    @DisplayName("Guardrail: Should REJECT transfer if Sender Account is FROZEN")
+    void shouldRejectTransfer_WhenSenderIsFrozen() {
+        // 1. Arrange
+        UUID senderId = UUID.randomUUID();
+        Account frozenSender = Account.builder()
+                .id(senderId)
+                .status(AccountStatus.FROZEN) // <--- The Trap
+                .currencyCode("EUR")
+                .build();
+
+        // Mock the locking call to return the frozen account
+        given(accountService.getAccountForUpdate(senderId)).willReturn(frozenSender);
+
+        // 2. Act & Assert
+        assertThatThrownBy(() ->
+                transferService.transferFunds(senderId, "receiver@opayque.com", "100.00", "EUR", "idemp-1")
+        )
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Account is currently FROZEN");
+
+        // 3. Verification
+        // FIX: Used 'recordEntry' instead of the non-existent 'performTransfer'
+        verify(ledgerService, never()).recordEntry(any());
+        verify(idempotencyService, never()).complete(anyString(), anyString());
+    }
+
+    /**
+     * Validates that a "Soft Deleted" account cannot initiate transfers.
+     * <p>
+     * A {@code CLOSED} account typically has a zero balance, but this guardrail
+     * acts as a double-check to prevent "Zombie Transactions" in case of
+     * race conditions or legacy data issues.
+     */
+    @Test
+    @DisplayName("Guardrail: Should REJECT transfer if Sender Account is CLOSED")
+    void shouldRejectTransfer_WhenSenderIsClosed() {
+        // 1. Arrange
+        UUID senderId = UUID.randomUUID();
+        Account closedSender = Account.builder()
+                .id(senderId)
+                .status(AccountStatus.CLOSED) // <--- The Trap
+                .currencyCode("GBP")
+                .build();
+
+        given(accountService.getAccountForUpdate(senderId)).willReturn(closedSender);
+
+        // 2. Act & Assert
+        assertThatThrownBy(() ->
+                transferService.transferFunds(senderId, "receiver@opayque.com", "50.00", "GBP", "idemp-2")
+        )
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Account is currently CLOSED");
+
+        // 3. Verification
+        verify(ledgerService, never()).recordEntry(any());
+    }
+
+
 }

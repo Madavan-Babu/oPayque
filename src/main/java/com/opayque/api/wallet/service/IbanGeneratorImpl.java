@@ -1,6 +1,7 @@
 package com.opayque.api.wallet.service;
 
 import com.opayque.api.wallet.repository.AccountRepository;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -36,6 +37,7 @@ public class IbanGeneratorImpl implements IbanGenerator {
     /// @param currencyCode The ISO 4217 code determining the target territory.
     /// @return A fully validated, checksum-verified IBAN string.
     /// @throws IllegalArgumentException If the territory is not supported by oPayque.
+    @Timed(value = "opayque.iban.generate", description = "Latency of ISO 13616 IBAN generation including DB sequence fetch")
     @Override
     public String generate(String currencyCode) {
         // 1. Strict Metadata Lookup: Ensures the currency falls within a supported
