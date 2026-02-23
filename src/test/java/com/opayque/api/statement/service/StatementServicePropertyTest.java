@@ -11,6 +11,7 @@ import com.opayque.api.wallet.entity.TransactionType;
 import com.opayque.api.wallet.repository.AccountRepository;
 import com.opayque.api.wallet.repository.LedgerRepository;
 import com.opayque.api.wallet.service.AccountService;
+import com.opayque.api.wallet.service.IbanMetadata;
 import jakarta.persistence.EntityManager;
 import net.jqwik.api.*;
 import net.jqwik.api.constraints.AlphaChars;
@@ -29,10 +30,7 @@ import java.io.StringWriter;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.Collections;
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -315,28 +313,25 @@ class StatementServicePropertyTest {
      *
      * <p>This method converts the provided three‑character currency code to upper case and
      * invokes {@code executeExportWithMockedEntry} to simulate an export of a salary entry.
-     * Only the currencies {@code EUR}, {@code GBP}, and {@code CHF} are considered supported.
+     * Supported currencies are dynamically resolved from {@link IbanMetadata}.
      * If the currency is supported, the exported output must contain the currency code;
      * otherwise, the output must not contain it. This ensures that unsupported currencies
      * are never leaked into export files.</p>
      *
-     * @param randomCurrency a randomly generated three‑letter currency code; the value is
-     *                       constrained to alphabetic characters by the {@code @AlphaChars}
-     *                       and {@code @StringLength(3)} annotations.
-     *
-     * @see com.opayque.api.statement.controller.StatementController
-     * @see StatementService
-     * @see LedgerRepository
+     * @param randomCurrency a randomly generated three‑letter currency code
      */
     @Property(tries = 100)
     void propertyCurrencyWhitelistEnforcement(@ForAll @AlphaChars @StringLength(value = 3) String randomCurrency) {
         String upperCurrency = randomCurrency.toUpperCase();
         String output = executeExportWithMockedEntry("Salary", upperCurrency, BigDecimal.TEN, null, null);
 
-        boolean isSupported = upperCurrency.equals("EUR") || upperCurrency.equals("GBP") || upperCurrency.equals("CHF");
+        // REFACTORED: Dynamically check if the generated currency exists in your IbanMetadata enum
+        boolean isSupported = Arrays.stream(IbanMetadata.values())
+                .map(Enum::name)
+                .anyMatch(name -> name.equals(upperCurrency));
 
         if (isSupported) {
-            assertTrue(output.contains(upperCurrency), "Supported currency was incorrectly stripped");
+            assertTrue(output.contains(upperCurrency), "Supported currency was incorrectly stripped: " + upperCurrency);
         } else {
             assertFalse(output.contains(upperCurrency), "Unsupported currency leaked into export: " + upperCurrency);
         }
