@@ -7,7 +7,8 @@ COPY src ./src
 RUN mvn clean package -DskipTests
 
 # Stage 2: Light-weight Runtime
-FROM openjdk:17-jdk-alpine
+# Replaced deprecated openjdk with eclipse-temurin JRE
+FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 # This keeps the image size under 200MB
