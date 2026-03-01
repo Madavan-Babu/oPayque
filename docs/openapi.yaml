@@ -1,0 +1,927 @@
+openapi: 3.0.3
+info:
+  version: 1.0.0
+  title: oPayque Banking API
+  description: >
+    Core API for the oPayque ecosystem. Provides secure endpoints for multi-currency 
+    wallet provisioning, identity management, atomic fund transfers, PCI-DSS compliant 
+    virtual card issuance, and administrative governance.
+servers:
+  - url: http://localhost:8080
+  - url: https://opayque-api.duckdns.org
+paths:
+  /api/v1/accounts:
+    post:
+      tags:
+        - wallet
+      operationId: createAccount
+      description: >
+        Provisions a new multi-currency account for the authenticated user identity.
+        
+        This endpoint extracts the user's primary identity from the security context 
+        and creates a sub-wallet restricted to a specific currency code. Validation relies 
+        on the GlobalExceptionHandler to map business violations, such as invalid currency 
+        codes or duplicate account creation, into a consistent JSON error format.
+      requestBody:
+        description: The validated account creation payload containing the target currency.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+    get:
+      tags:
+        - wallet
+      operationId: getMyWallets
+      description: >
+        Dashboard View: Retrieves all wallets for the user along with their real-time balances.
+        
+        This acts as the primary data fetcher for the frontend. It retrieves the user's 
+        portfolio from the AccountService and loops through each wallet to calculate 
+        the live balance dynamically from the LedgerService.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WalletSummary'
+  
+  /api/v1/accounts/{id}/balance:
+    get:
+      tags:
+        - wallet
+      operationId: getBalance
+      description: >
+        Single Account Balance View.
+        
+        Allows the frontend to poll for the latest aggregated balance of a specific wallet.
+        
+        **Security:** Implements strict IDOR/BOLA protection. The authenticated user MUST 
+        own the wallet ID requested in the path. Access by unauthorized users will trigger 
+        an AccessDeniedException.
+      parameters:
+        - name: id
+          in: path
+          description: The Account UUID.
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BigDecimal'
+  
+  /api/v1/accounts/{id}:
+    delete:
+      tags:
+        - wallet
+      operationId: closeAccount
+      description: >
+        Soft-deletes a user's wallet.
+        
+        This endpoint performs a Customer-Initiated Closure. It enforces strict ownership 
+        checks before transitioning the account state to CLOSED. Once closed, the account 
+        cannot be used for transactions, but the ledger history remains intact for audit 
+        and compliance purposes.
+      parameters:
+        - name: id
+          in: path
+          description: The UUID of the wallet to close.
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: No Content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Void'
+  
+  /api/v1/auth/register:
+    post:
+      tags:
+        - auth
+      operationId: register
+      description: >
+        Registers a new user identity in the oPayque ecosystem.
+        
+        Validates the input payload and delegates the creation to the AuthService. 
+        Enforces unique email constraints and soft-delete compliance policies.
+      requestBody:
+        description: The validated registration payload.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+  
+  /api/v1/auth/login:
+    post:
+      tags:
+        - auth
+      operationId: authenticate
+      description: >
+        Authenticates user credentials and issues a Dual Token Pair (Access + Refresh).
+        
+        Performs credential verification via the AuthService and returns a signed 
+        response containing both temporal access tokens (JWT) and persistent opaque 
+        refresh tokens. Enforces a Single Active Session (SAS) policy.
+      requestBody:
+        description: The validated login credentials.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+  
+  /api/v1/auth/refresh:
+    post:
+      tags:
+        - auth
+      operationId: refreshToken
+      description: >
+        Secure Token Rotation Endpoint.
+        
+        Exchanges a valid Refresh Token for a brand new Access and Refresh Token pair. 
+        This implementation utilizes Token Rotation: once used, the old refresh token 
+        is immediately invalidated to mitigate the risk of token theft.
+      requestBody:
+        description: Contains the opaque refresh token string.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+  
+  /api/v1/auth/logout:
+    post:
+      tags:
+        - auth
+      operationId: logout
+      description: >
+        Terminates the user's current session by invalidating the provided JWT.
+        
+        Implements a manual Kill Switch by extracting the JWT signature and adding 
+        it to the Redis blocklist for its remaining TTL. Setting `required = false` 
+        on the header prevents framework-level errors, allowing for a semantically 
+        correct 401 response for malformed headers.
+      parameters:
+        - name: Authorization
+          in: header
+          description: The raw Authorization header containing the Bearer token.
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Void'
+  
+  /api/v1/demo/me:
+    get:
+      tags:
+        - demo
+      operationId: secureEndpoint
+      description: >
+        A simple, secure endpoint used to verify that the authentication and RBAC 
+        filters are correctly processing the user's JWT.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+
+  /api/v1/users/{id}:
+    get:
+      tags:
+        - user
+      operationId: getUserProfile
+      description: >
+        Secure Profile Access Endpoint.
+        
+        Fetches the profile details for a specific user ID. Access is strictly limited 
+        to the account owner; any attempt by an external user to access this URI will 
+        result in an AccessDeniedException to prevent BOLA (Broken Object Level Authorization).
+      parameters:
+        - name: id
+          in: path
+          description: The UUID of the user profile to retrieve.
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+  
+  /api/v1/admin/stats:
+    get:
+      tags:
+        - admin
+      operationId: getSystemStats
+      description: >
+        Protected Endpoint: System Statistics.
+        
+        **RBAC Gate:** Only users with the 'ROLE_ADMIN' authority can execute this method. 
+        If a standard CUSTOMER attempts access, Spring Security blocks it before the 
+        method is entered, returning a 403 Forbidden.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+
+  /api/v1/transfers:
+    post:
+      tags:
+        - transfer
+      operationId: initiateTransfer
+      description: >
+        Initiates a P2P fund transfer.
+        
+        Executes an atomic transfer of funds between two wallets denominated in the 
+        same currency. Subject to rate-limiting and requires a strict `Idempotency-Key` 
+        header to prevent double-charging. The sender is resolved exclusively from 
+        the JWT security context.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: Unique client-generated key (UUID format recommended) to ensure atomicity.
+          required: true
+          schema:
+            type: string
+      requestBody:
+        description: The strict DTO containing receiver email, amount, and currency.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+  
+  /api/v1/cards/issue:
+    post:
+      tags:
+        - card
+      operationId: issueCard
+      description: >
+        Self-service issuance of a PCI-compliant virtual card.
+        
+        The response contains the **unmasked PAN and CVV**; these secrets are exposed 
+        once only and immediately masked in all subsequent payloads. 
+        
+        **Idempotency:** Duplicate requests within 60s with the same `Idempotency-Key` 
+        return the original payload without creating a second card. Rate-limiting is 
+        enforced to prevent card-farming attacks.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: Idempotency key for replay protection.
+          required: true
+          schema:
+            type: string
+      requestBody:
+        description: Validated JSON payload containing the ISO-4217 currency code and optional limit.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardIssueRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardIssueResponse'
+  
+  /api/v1/cards:
+    get:
+      tags:
+        - card
+      operationId: getMyCards
+      description: >
+        Returns the paginated, masked inventory of all payment instruments owned by 
+        the authenticated subject.
+        
+        Sensitive data such as PAN, CVV, and track-data are redacted to satisfy 
+        PCI-DSS and PSD2 mandates. Only the last four digits of the PAN and the card 
+        status are exposed.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CardSummaryResponse'
+  
+  /api/v1/cards/{cardId}/status:
+    patch:
+      tags:
+        - card
+      operationId: updateCardStatus
+      description: >
+        Performs a state-transition on the specified card in accordance with the 
+        CardStatus state machine.
+        
+        Valid transitions:
+        - ACTIVE -> FROZEN | TERMINATED
+        - FROZEN -> ACTIVE | TERMINATED
+        - TERMINATED is terminal and irreversible
+        
+        All transitions are asynchronously replicated to the HSM for EMV CRL updates 
+        and dual-logged in the immutable ledger for regulatory reporting.
+      parameters:
+        - name: cardId
+          in: path
+          description: UUID of the card to mutate; must belong to the authenticated subject.
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        description: DTO containing the target status.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardStatusUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardSummaryResponse'
+  
+  /api/v1/cards/{cardId}/limit:
+    patch:
+      tags:
+        - card
+      operationId: updateCardLimit
+      description: >
+        Updates the monthly spending limit of a specific card.
+        
+        Restricted to 5 updates per minute to prevent griefing. Protected against 
+        replay attacks via the required `Idempotency-Key` header.
+      parameters:
+        - name: cardId
+          in: path
+          description: UUID of the card.
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          description: Idempotency key for replay protection.
+          required: true
+          schema:
+            type: string
+      requestBody:
+        description: JSON containing the new BigDecimal limit.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardLimitUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardSummaryResponse'
+  
+  /api/v1/simulation/card-transaction:
+    post:
+      tags:
+        - cardSimulation
+      operationId: processTransaction
+      description: >
+        Simulates a Point-of-Sale (POS) card swipe.
+        
+        Acts as the north-bound gateway for ISO-8583 style payloads. Delegates business 
+        rules (risk scoring, velocity checks, merchant limits) to the service layer. 
+        Requests are idempotent and processed with strict limits against the underlying 
+        Redis atomic ledger.
+      requestBody:
+        description: The ISO-8583 style payload containing card details and amount.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardTransactionRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardTransactionResponse'
+  
+  /api/v1/statements/export:
+    get:
+      tags:
+        - statement
+      operationId: exportStatement
+      description: >
+        Streams a CSV export of the requested account's ledger entries.
+        
+        Bound as a GET request where the parameters (accountId, startDate, endDate) 
+        are provided via the Query String. Streams the data directly to the network 
+        buffer to maintain low heap memory usage. Protects against BOLA and applies 
+        CSV/Formula Injection sanitization.
+      parameters:
+        - name: accountId
+          in: query
+          description: The UUID of the account.
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: startDate
+          in: query
+          description: The inclusive start date (YYYY-MM-DD).
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          description: The inclusive end date (YYYY-MM-DD).
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: OK
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+
+  /api/v1/admin/accounts/{id}/status:
+    patch:
+      tags:
+        - adminWallet
+      operationId: updateAccountStatus
+      description: >
+        Updates the status of a specific account as performed by an administrator.
+        
+        Extracts the administrator's email from the security context and enforces 
+        strict governance. Returns a safe DTO that masks sensitive fields to protect PII.
+      parameters:
+        - name: id
+          in: path
+          description: UUID identifier of the target account.
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        description: Payload containing the new AccountStatus.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountStatusUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccountResponse'
+  
+  /api/v1/admin/accounts/{id}/deposit:
+    post:
+      tags:
+        - adminWallet
+      operationId: depositFunds
+      description: >
+        Handles an administrator-initiated fund injection ("minting") into a specific wallet.
+        
+        Delegates the operation to the LedgerService to guarantee atomic locking, 
+        rate-limiting, and proper ledger entry creation. Fully audited and governed 
+        for regulatory traceability.
+      parameters:
+        - name: id
+          in: path
+          description: UUID identifier of the target wallet.
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        description: Payload containing the amount, currency, and optional description.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoneyDepositRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDepositResponse'   
+components:
+  schemas:
+    # --- Enums (Extracted from Entities) ---
+    Role:
+      type: string
+      enum: [CUSTOMER, ADMIN]
+    CardStatus:
+      type: string
+      enum: [ACTIVE, FROZEN, TERMINATED]
+    AccountStatus:
+      type: string
+      enum: [ACTIVE, FROZEN, CLOSED]
+    PaymentStatus:
+      type: string
+      enum: [APPROVED, DECLINED, INSUFFICIENT_FUNDS, CARD_EXPIRED, CARD_FROZEN, LIMIT_EXCEEDED]
+    TransactionType:
+      type: string
+      enum: [CREDIT, DEBIT]
+
+    # --- Utility / Base Types ---
+    BigDecimal:
+      type: number
+      format: double
+    Void:
+      type: object
+      description: Represents an empty HTTP 204 No Content response body
+
+    # --- Wallet / Accounts ---
+    AccountResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        currencyCode:
+          type: string
+        iban:
+          type: string
+        balance:
+          $ref: '#/components/schemas/BigDecimal'
+
+    CreateAccountRequest:
+      type: object
+      required:
+        - currencyCode
+      properties:
+        currencyCode:
+          type: string
+          description: ISO 4217 currency code
+
+    WalletSummary:
+      type: object
+      properties:
+        account:
+          $ref: '#/components/schemas/AccountResponse'
+        balance:
+          $ref: '#/components/schemas/BigDecimal'
+
+    # --- Identity / Auth ---
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - password
+        - fullName
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        fullName:
+          type: string
+
+    RegisterResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        fullName:
+          type: string
+        role:
+          type: string
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        refreshToken:
+          type: string
+        type:
+          type: string
+          default: Bearer
+
+    RefreshTokenRequest:
+      type: object
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        fullName:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+
+    # --- Transfers ---
+    TransferRequest:
+      type: object
+      required:
+        - receiverEmail
+        - amount
+        - currency
+      properties:
+        receiverEmail:
+          type: string
+          format: email
+        amount:
+          type: string
+          pattern: ^\d+(\.\d{1,2})?$
+        currency:
+          type: string
+          pattern: ^[A-Z]{3}$
+
+    TransferResponse:
+      type: object
+      properties:
+        transferId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    # --- Cards ---
+    CardIssueRequest:
+      type: object
+      required:
+        - currency
+      properties:
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+        monthlyLimit:
+          $ref: '#/components/schemas/BigDecimal'
+          minimum: 1.00
+
+    CardIssueResponse:
+      type: object
+      properties:
+        cardId:
+          type: string
+          format: uuid
+        pan:
+          type: string
+        cvv:
+          type: string
+        expiryDate:
+          type: string
+        cardholderName:
+          type: string
+        currency:
+          type: string
+        status:
+          $ref: '#/components/schemas/CardStatus'
+        monthlyLimit:
+          $ref: '#/components/schemas/BigDecimal'
+
+    CardSummaryResponse:
+      type: object
+      properties:
+        cardId:
+          type: string
+          format: uuid
+        maskedPan:
+          type: string
+        expiryDate:
+          type: string
+        cardholderName:
+          type: string
+        currency:
+          type: string
+        status:
+          $ref: '#/components/schemas/CardStatus'
+        monthlyLimit:
+          $ref: '#/components/schemas/BigDecimal'
+
+    CardStatusUpdateRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          $ref: '#/components/schemas/CardStatus'
+
+    CardLimitUpdateRequest:
+      type: object
+      required:
+        - newLimit
+      properties:
+        newLimit:
+          $ref: '#/components/schemas/BigDecimal'
+          minimum: 0.00
+
+    CardTransactionRequest:
+      type: object
+      required:
+        - pan
+        - cvv
+        - expiryDate
+        - amount
+        - currency
+        - merchantName
+        - externalTransactionId
+      properties:
+        pan:
+          type: string
+          pattern: ^\d{16}$
+        cvv:
+          type: string
+          pattern: ^\d{3}$
+        expiryDate:
+          type: string
+          pattern: ^(0[1-9]|1[0-2])/\d{2}$
+        amount:
+          $ref: '#/components/schemas/BigDecimal'
+          minimum: 0.01
+        currency:
+          type: string
+        merchantName:
+          type: string
+        merchantCategoryCode:
+          type: string
+          pattern: ^\d{4}$
+        externalTransactionId:
+          type: string
+
+    CardTransactionResponse:
+      type: object
+      properties:
+        transactionId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        approvalCode:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    # --- Admin ---
+    AdminAccountResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        iban:
+          type: string
+        currency:
+          type: string
+        status:
+          $ref: '#/components/schemas/AccountStatus'
+        ownerEmail:
+          type: string
+
+    AccountStatusUpdateRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          $ref: '#/components/schemas/AccountStatus'
+
+    AdminDepositResponse:
+      type: object
+      properties:
+        transactionId:
+          type: string
+          format: uuid
+        referenceId:
+          type: string
+          format: uuid
+        amount:
+          $ref: '#/components/schemas/BigDecimal'
+        currency:
+          type: string
+        type:
+          $ref: '#/components/schemas/TransactionType'
+        status:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    MoneyDepositRequest:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          $ref: '#/components/schemas/BigDecimal'
+          exclusiveMinimum: 0
+        currency:
+          type: string
+          pattern: ^[A-Z]{3}$
+        description:
+          type: string
+          maxLength: 100
