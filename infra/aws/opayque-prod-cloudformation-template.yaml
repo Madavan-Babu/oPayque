@@ -1,0 +1,475 @@
+---
+Metadata:
+  AWSToolsMetrics:
+    IaC_Generator: !Sub "arn:aws:cloudformation:ap-south-2:${AWS::AccountId}:generatedTemplate/ffe0fdf0-0ab1-4407-9c9b-e9b79bc69f7a"
+Parameters:
+  KeyName:
+    Default: "opayque-ec2-key"
+    Type: "String"
+    Description: "Name of an existing EC2 KeyPair to enable SSH access"
+  MyPublicKey:
+    Type: String
+    Description: "Paste your public SSH key here (e.g., ssh-rsa AAA...)"
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: "Password for the RDS PostgreSQL database master user"
+Resources:
+  ElastiCacheSubnetGroupOpayqueredissubnet:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::ElastiCache::SubnetGroup"
+    DeletionPolicy: "Delete"
+    Properties:
+      SubnetIds:
+      - Ref: "EC2Subnet"
+      - Ref: "EC2SubnetOE"
+      - Ref: "EC2SubnetGl"
+      CacheSubnetGroupName: "opayque-redis-subnet"
+      Description: "Subnet group for oPayque Redis cluster"
+  EC2KeyPairOpayqueec2key:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::KeyPair"
+    DeletionPolicy: "Delete"
+    Properties:
+      KeyName: "opayque-ec2-key"
+      KeyType: "rsa"
+      PublicKeyMaterial: !Ref MyPublicKey
+      Tags: []
+  EC2Instance:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::Instance"
+    DeletionPolicy: "Delete"
+    Properties:
+      Tenancy: "default"
+      MetadataOptions:
+        HttpPutResponseHopLimit: 2
+        HttpProtocolIpv6: "disabled"
+        HttpTokens: "required"
+        InstanceMetadataTags: "disabled"
+        HttpEndpoint: "enabled"
+      InstanceInitiatedShutdownBehavior: "stop"
+      BlockDeviceMappings:
+      - Ebs:
+          VolumeType: "gp3"
+          Iops: 3000
+          VolumeSize: 8
+          Encrypted: false
+          DeleteOnTermination: true
+        DeviceName: "/dev/xvda"
+      PrivateDnsNameOptions:
+        EnableResourceNameDnsARecord: true
+        HostnameType: "ip-name"
+        EnableResourceNameDnsAAAARecord: false
+      IamInstanceProfile:
+        Ref: "IAMInstanceProfileOpayqueec2ecrrole"
+      SubnetId:
+        Ref: "EC2SubnetGl"
+      SecurityGroupIds:
+      - Ref: "EC2SecurityGroup"
+      EbsOptimized: true
+      DisableApiTermination: false
+      SourceDestCheck: true
+      PlacementGroupName: ""
+      VpcId: "vpc-094f669c7f93c186d"
+      State:
+        Code: "16"
+        Name: "running"
+      NetworkInterfaces:
+      - Ipv6Addresses: []
+        SubnetId:
+          Ref: "EC2SubnetGl"
+        SecondaryPrivateIpAddressCount: 0
+        NetworkInterfaceId:
+          Ref: "EC2NetworkInterface"
+        DeviceIndex: "0"
+      ImageId: "ami-090b9c8aa1c84aefc"
+      InstanceType: "t3.micro"
+      Monitoring: false
+      Tags:
+      - Value: "opayque-api-server"
+        Key: "Name"
+      CreditSpecification:
+        CPUCredits: "standard"
+  ElastiCacheUser:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::ElastiCache::User"
+    DeletionPolicy: "Delete"
+    Properties:
+      UserName: "default"
+      UserId: "default"
+      Engine: "redis"
+      Tags: []
+  EC2Volume:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::Volume"
+    DeletionPolicy: "Delete"
+    Properties:
+      MultiAttachEnabled: false
+      VolumeType: "gp3"
+      Encrypted: false
+      Size: 8
+      AutoEnableIO: true
+      AvailabilityZoneId: "aps2-az1"
+      AvailabilityZone: "ap-south-2a"
+      Throughput: 125
+      Iops: 3000
+      Tags: []
+  RDSDBSubnetGroupDefaultvpc094f669c7f93c186d:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::RDS::DBSubnetGroup"
+    DeletionPolicy: "Delete"
+    Properties:
+      DBSubnetGroupDescription: "Created from the RDS Management Console"
+      SubnetIds:
+      - Ref: "EC2Subnet"
+      - Ref: "EC2SubnetOE"
+      - Ref: "EC2SubnetGl"
+      DBSubnetGroupName: "default-vpc-094f669c7f93c186d"
+  EC2Subnet:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::Subnet"
+    DeletionPolicy: "Delete"
+    Properties:
+      MapPublicIpOnLaunch: true
+      EnableDns64: false
+      VpcId:
+        Ref: "EC2VPC"
+      AvailabilityZoneId: "aps2-az3"
+      PrivateDnsNameOptionsOnLaunch:
+        EnableResourceNameDnsARecord: false
+        HostnameType: "ip-name"
+        EnableResourceNameDnsAAAARecord: false
+      CidrBlock: "172.31.16.0/20"
+      Ipv6Native: false
+      Tags: []
+  EC2Route:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::Route"
+    DeletionPolicy: "Delete"
+    Properties:
+      RouteTableId:
+        Ref: "EC2RouteTable"
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId:
+        Ref: "EC2InternetGateway"
+  EC2SecurityGroup:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::SecurityGroup"
+    DeletionPolicy: "Delete"
+    Properties:
+      GroupDescription: "Security group for oPayque API server"
+      GroupName: "opayque-ec2-sg"
+      VpcId:
+        Ref: "EC2VPC"
+      SecurityGroupIngress:
+      - CidrIp: "0.0.0.0/0"
+        IpProtocol: "tcp"
+        FromPort: 80
+        ToPort: 80
+      - CidrIp: "0.0.0.0/0"
+        IpProtocol: "tcp"
+        FromPort: 8080
+        ToPort: 8080
+      - CidrIp: "157.51.120.131/32"
+        IpProtocol: "tcp"
+        FromPort: 22
+        ToPort: 22
+      - CidrIp: "0.0.0.0/0"
+        IpProtocol: "tcp"
+        FromPort: 443
+        ToPort: 443
+      SecurityGroupEgress:
+      - CidrIp: "0.0.0.0/0"
+        IpProtocol: "-1"
+        FromPort: -1
+        ToPort: -1
+  EC2SubnetOE:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::Subnet"
+    DeletionPolicy: "Delete"
+    Properties:
+      MapPublicIpOnLaunch: true
+      EnableDns64: false
+      VpcId:
+        Ref: "EC2VPC"
+      AvailabilityZoneId: "aps2-az2"
+      PrivateDnsNameOptionsOnLaunch:
+        EnableResourceNameDnsARecord: false
+        HostnameType: "ip-name"
+        EnableResourceNameDnsAAAARecord: false
+      CidrBlock: "172.31.32.0/20"
+      Ipv6Native: false
+      Tags: []
+  IAMRoleOpayqueec2ecrrole:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::IAM::Role"
+    DeletionPolicy: "Delete"
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+      MaxSessionDuration: 3600
+      RoleName: "opayque-ec2-ecr-role"
+      Description: "Allows EC2 instances to call AWS services on your behalf."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Action: "sts:AssumeRole"
+          Effect: "Allow"
+          Principal:
+            Service: "ec2.amazonaws.com"
+  ECRRepositoryOpayqueapi:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::ECR::Repository"
+    DeletionPolicy: "Delete"
+    Properties:
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      RepositoryName: "opayque-api"
+      EncryptionConfiguration:
+        EncryptionType: "AES256"
+      Tags: []
+      ImageTagMutability: "MUTABLE"
+      LifecyclePolicy:
+        LifecyclePolicyText: "{\"rules\":[{\"rulePriority\":1,\"description\":\"Keep\
+          \ only one image.\",\"selection\":{\"tagStatus\":\"any\",\"countType\":\"\
+          imageCountMoreThan\",\"countNumber\":1},\"action\":{\"type\":\"expire\"\
+          }}]}"
+        RegistryId: !Sub "${AWS::AccountId}"
+  KMSKey:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::KMS::Key"
+    DeletionPolicy: "Delete"
+    Properties:
+      Origin: "AWS_KMS"
+      MultiRegion: false
+      Description: "Default key that protects my RDS database volumes when no other\
+        \ key is defined"
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+        - Condition:
+            StringEquals:
+              kms:ViaService: "rds.ap-south-2.amazonaws.com"
+              kms:CallerAccount: !Sub "${AWS::AccountId}"
+          Resource: "*"
+          Action:
+          - "kms:Encrypt"
+          - "kms:Decrypt"
+          - "kms:ReEncrypt*"
+          - "kms:GenerateDataKey*"
+          - "kms:CreateGrant"
+          - "kms:ListGrants"
+          - "kms:DescribeKey"
+          Effect: "Allow"
+          Principal:
+            AWS: "*"
+          Sid: "Allow access through RDS for all principals in the account that are\
+            \ authorized to use RDS"
+        - Resource: "*"
+          Action:
+          - "kms:Describe*"
+          - "kms:Get*"
+          - "kms:List*"
+          - "kms:RevokeGrant"
+          Effect: "Allow"
+          Principal:
+            AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+          Sid: "Allow direct access to key metadata to the account"
+        Id: "auto-rds-2"
+      KeySpec: "SYMMETRIC_DEFAULT"
+      Enabled: true
+      EnableKeyRotation: true
+      KeyUsage: "ENCRYPT_DECRYPT"
+      Tags: []
+  RDSDBInstance:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::RDS::DBInstance"
+    DeletionPolicy: "Delete"
+    Properties:
+      DatabaseInsightsMode: "standard"
+      StorageEncrypted: true
+      AssociatedRoles: []
+      Port: "5432"
+      AdditionalStorageVolumes: []
+      ProcessorFeatures: []
+      StorageThroughput: 0
+      PreferredBackupWindow: "12:19-12:49"
+      MonitoringInterval: 0
+      DBParameterGroupName: "default.postgres15"
+      NetworkType: "IPV4"
+      DedicatedLogVolume: false
+      CopyTagsToSnapshot: true
+      MultiAZ: false
+      Engine: "postgres"
+      Tags: []
+      PerformanceInsightsKMSKeyId:
+        Fn::GetAtt:
+        - "KMSKey"
+        - "Arn"
+      EngineLifecycleSupport: "open-source-rds-extended-support-disabled"
+      LicenseModel: "postgresql-license"
+      EngineVersion: "15.15"
+      StorageType: "gp2"
+      KmsKeyId:
+        Fn::GetAtt:
+        - "KMSKey"
+        - "Arn"
+      DBInstanceClass: "db.t4g.micro"
+      PerformanceInsightsRetentionPeriod: 7
+      AvailabilityZone: "ap-south-2b"
+      OptionGroupName: "default:postgres-15"
+      PreferredMaintenanceWindow: "sat:08:33-sat:09:03"
+      EnablePerformanceInsights: true
+      AutoMinorVersionUpgrade: true
+      DBSubnetGroupName:
+        Ref: "RDSDBSubnetGroupDefaultvpc094f669c7f93c186d"
+      DeletionProtection: false
+      DBInstanceIdentifier: "opayque-prod-db"
+      AllocatedStorage: "20"
+      BackupTarget: "region"
+      CACertificateIdentifier: "rds-ca-rsa2048-g1"
+      ManageMasterUserPassword: false
+      MasterUserPassword: !Ref DBPassword
+      VPCSecurityGroups:
+      - Fn::GetAtt:
+        - "EC2SecurityGroupAm"
+        - "GroupId"
+      DBSecurityGroups: []
+      MasterUsername: "madavan"
+      DBName: "opayque_db"
+      EnableIAMDatabaseAuthentication: false
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 1
+      EnableCloudwatchLogsExports: []
+  EC2VPC:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::VPC"
+    DeletionPolicy: "Delete"
+    Properties:
+      CidrBlock: "172.31.0.0/16"
+      EnableDnsSupport: true
+      InstanceTenancy: "default"
+      EnableDnsHostnames: true
+      Tags: []
+  EC2VolumeAttachment:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::VolumeAttachment"
+    DeletionPolicy: "Delete"
+    Properties:
+      VolumeId:
+        Ref: "EC2Volume"
+      InstanceId:
+        Ref: "EC2Instance"
+      Device: "/dev/xvda"
+      EbsCardIndex: 0
+  EC2NetworkInterface:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::NetworkInterface"
+    DeletionPolicy: "Delete"
+    Properties:
+      SourceDestCheck: true
+      InterfaceType: "interface"
+      Description: ""
+      SecondaryPrivateIpAddressCount: 0
+      Ipv6PrefixCount: 0
+      Ipv4Prefixes: []
+      Ipv4PrefixCount: 0
+      GroupSet:
+      - Ref: "EC2SecurityGroup"
+      Ipv6Prefixes: []
+      SubnetId:
+        Ref: "EC2SubnetGl"
+      Tags: []
+  EC2RouteTable:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::RouteTable"
+    DeletionPolicy: "Delete"
+    Properties:
+      VpcId:
+        Ref: "EC2VPC"
+  EC2SecurityGroupAm:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::SecurityGroup"
+    DeletionPolicy: "Delete"
+    Properties:
+      GroupDescription: "default VPC security group"
+      GroupName: "default"
+      VpcId:
+        Ref: "EC2VPC"
+      SecurityGroupIngress:
+      - IpProtocol: "tcp"
+        Description: "PostgreSQL RDS Connection"
+        FromPort: 5432
+        SourceSecurityGroupId:
+          Ref: "EC2SecurityGroup"
+        ToPort: 5432
+        SourceSecurityGroupOwnerId: !Sub "${AWS::AccountId}"
+      - IpProtocol: "-1"
+        FromPort: -1
+        SourceSecurityGroupId:
+          Fn::GetAtt:
+          - "EC2VPC"
+          - "DefaultSecurityGroup"
+        ToPort: -1
+        SourceSecurityGroupOwnerId: !Sub "${AWS::AccountId}"
+      - IpProtocol: "tcp"
+        Description: "Redis OSS Cache Connection"
+        FromPort: 6379
+        SourceSecurityGroupId:
+          Ref: "EC2SecurityGroup"
+        ToPort: 6379
+        SourceSecurityGroupOwnerId: !Sub "${AWS::AccountId}"
+      SecurityGroupEgress:
+      - CidrIp: "0.0.0.0/0"
+        IpProtocol: "-1"
+        FromPort: -1
+        ToPort: -1
+  EC2InternetGateway:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::InternetGateway"
+    DeletionPolicy: "Delete"
+    Properties:
+      Tags: []
+  EC2SubnetGl:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::EC2::Subnet"
+    DeletionPolicy: "Delete"
+    Properties:
+      MapPublicIpOnLaunch: true
+      EnableDns64: false
+      VpcId:
+        Ref: "EC2VPC"
+      AvailabilityZoneId: "aps2-az1"
+      PrivateDnsNameOptionsOnLaunch:
+        EnableResourceNameDnsARecord: false
+        HostnameType: "ip-name"
+        EnableResourceNameDnsAAAARecord: false
+      CidrBlock: "172.31.0.0/20"
+      Ipv6Native: false
+      Tags: []
+  IAMInstanceProfileOpayqueec2ecrrole:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::IAM::InstanceProfile"
+    DeletionPolicy: "Delete"
+    Properties:
+      Path: "/"
+      Roles:
+      - Ref: "IAMRoleOpayqueec2ecrrole"
+      InstanceProfileName:
+        Ref: "IAMRoleOpayqueec2ecrrole"
+  IAMUserGithubactionsopayque:
+    UpdateReplacePolicy: "Delete"
+    Type: "AWS::IAM::User"
+    DeletionPolicy: "Delete"
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
+      - "arn:aws:iam::aws:policy/AWSAppRunnerFullAccess"
+      UserName: "github-actions-opayque"
+      Tags:
+      - Value: "oPayque"
+        Key: "Project"
+      - Value: "GitHub-CI-CD-Pipeline"
+        Key: "Purpose"
