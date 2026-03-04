@@ -67,30 +67,30 @@ The oPayque API implements a strict **Zero-Trust, Stateless Security Architectur
 
 > 🏛️ **Design Philosophy:** Never trust the client. Never trust the network. Never log the plaintext.
 
-### 🛡️ Frontline HTTP Defense (OWASP Compliance)
+### Frontline HTTP Defense (OWASP Compliance)
 Before a request even reaches the authentication filter, the `SecurityConfig` enforces rigorous browser-side constraints to neutralize common attack vectors:
 * **Strict-Transport-Security (HSTS):** Enforces HTTPS-only communication across all subdomains for 1 year (`maxAgeInSeconds = 31536000`), neutralizing SSL-downgrade and MITM attacks.
 * **Content Security Policy (CSP):** `default-src 'self'; frame-ancestors 'none';` halts cross-site scripting (XSS) at the browser execution level.
 * **X-Frame-Options (DENY):** Provides absolute immunity against UI redressing and Clickjacking.
 * **No-Cache Directives:** Prevents sensitive financial payloads (like account balances or encrypted secrets) from being cached on client disks or intermediate proxy servers.
 
-### 🔑 Cryptographic Identity & Dual-Token Strategy
+### Cryptographic Identity & Dual-Token Strategy
 User registration and session management are handled with uncompromising cryptographic standards:
 * **BCrypt Password Hashing:** Credentials are one-way hashed before persistence. The `AuthService` enforces a strict "Soft Delete" policy, preventing active account duplication.
 * **Dual-Token Rotation:** Upon login, users receive a short-lived temporal **Access Token (JWT)** and a high-entropy opaque **Refresh Token**.
 * **Single Active Session (SAS):** Initiating a new session automatically revokes the antecedent refresh token. Token rotation invalidates the previous token string, severely narrowing the window for token-theft exploitation.
 
-### 🚫 Stateless Logout & Replay Attack Prevention
+### Stateless Logout & Replay Attack Prevention
 Traditional JWTs cannot be invalidated before their natural expiration. oPayque solves this distributed systems problem using a **Redis-backed Kill Switch**:
 * **The Blocklist Engine:** When `/api/v1/auth/logout` is called, the `AuthService` extracts the unique HMAC signature of the JWT and pushes it to Redis via the `TokenBlocklistService`.
 * **Memory-Optimized TTLs:** Only the signature (not the full token) is stored. Redis is configured with an exact TTL matching the token's remaining lifespan, ensuring an auto-purging, $O(1)$ lookup blocklist that completely neutralizes Replay Attacks without bloating cache memory.
 
-### 🛑 BOLA Shield & RBAC Guardrails
+### BOLA Shield & RBAC Guardrails
 Broken Object Level Authorization (BOLA) is the #1 API vulnerability. oPayque eliminates this threat fundamentally at the controller level:
 * **Strict Context Resolution:** Endpoint logic *never* accepts a `senderId` or `userId` from the request body. Instead, the identity is cryptographically extracted directly from the validated JWT Principal (e.g., `authentication.getName()`).
 * **Role-Based Access Control (RBAC):** Privileged endpoints (`/api/v1/admin/**` and Actuator telemetry) are strictly locked behind the `ADMIN` authority boundary. 
 
-### 🕵️ PCI-DSS Aligned Log Sanitization
+### PCI-DSS Aligned Log Sanitization
 To ensure operational compliance and protect user privacy, the API intercepts its own telemetry before it leaves the application context:
 * **Regex-Powered PII Masking:** A custom Logback `PiiLoggingConverter` acts as a surgical filter. Using lookbehind and lookahead regex, it detects structured Personally Identifiable Information (PII) like email addresses in the application logs.
 * **Context Preservation:** It truncates the local part of the email while preserving the domain (e.g., `dev@opayque.com` becomes `d***@opayque.com`). This ensures the logs remain highly useful for DevOps debugging while completely shielding the user's actual identity from persistent storage.
@@ -101,45 +101,75 @@ Most standard applications track financial state using a mutable `balance` colum
 
 oPayque Abandons the mutable balance in favor of an **Event-Sourced, Append-Only Ledger**. The system derives the absolute truth dynamically, treating every transaction as a mathematically pure, immutable event.
 
-### 🏛️ The Immutable Double-Entry Ledger
+### The Immutable Double-Entry Ledger
 The core of the financial engine resides in the `LedgerService` and the `@Immutable` `LedgerEntry` entity.
 * **Dynamic Balance Aggregation:** Balances are never "updated." Instead, the `LedgerRepository` executes a real-time, zero-sum aggregation (`SELECT SUM(CASE WHEN type = CREDIT THEN amount ELSE -amount)`) to calculate the exact available funds at that microsecond.
 * **PostgreSQL Index-Only Scans:** To ensure this dynamic aggregation remains lightning-fast even with millions of rows, the database utilizes a native covering index (`idx_ledger_covering` on `account_id, transaction_type, amount`). This forces PostgreSQL to execute the math entirely within the index memory, bypassing expensive table Heap fetches.
 * **Native Partitioning & Streaming:** By utilizing native PostgreSQL partitioning on the `recorded_at` column rather than heavy extensions like TimescaleDB, the system avoids vendor lock-in. High-volume statement exports utilize Spring Data's forward-only `Slice` to bypass massive `COUNT()` overhead on deep ledger pages.
 
-### 🧮 Zero-Precision-Loss with Joda-Money
+### Zero-Precision-Loss with Joda-Money
 Standard `Double` or `Float` primitives are mathematically dangerous for financial systems due to floating-point rounding errors. 
 * **Joda-Money Engine:** The `LedgerService` delegates all cross-currency math and balance mutations to the `Joda-Money` library.
 * **Scale Enforcement:** Values are strictly bound to `BigMoney` objects, parsed, converted, and persisted with a rigid database schema scale of 4 (`precision = 19, scale = 4`) using `RoundingMode.HALF_EVEN` (Banker's Rounding) to guarantee absolute mathematical perfection across high-volume ledgers.
 
-### 🔢 Bank-Grade Provisioning & Cryptographic Validation
+### Bank-Grade Provisioning & Cryptographic Validation
 To operate as a true Neobank, the system must generate universally recognized financial identifiers capable of passing external validation engines.
 * **ISO 13616 IBAN Generation:** The `IbanGeneratorImpl` is responsible for manufacturing mathematically valid International Bank Account Numbers. It programmatically derives the check digits based on the specific country code and our internal institution routing logic, ensuring every provisioned wallet complies with global financial messaging standards.
 * **Custom Institutional BIN:** oPayque operates on its own dedicated 6-digit Bank Identification Number (BIN) prefix: **`171103`**. This custom routing prefix structurally identifies all issued virtual cards as originating from the oPayque ecosystem.
 * **Luhn Algorithm Checksums:** Before any Virtual Card is persisted or authorized, the `LuhnAlgorithm` utility enforces a strict Modulus 10 checksum validation. This mathematically guarantees the structural integrity of the 16-digit Primary Account Number (PAN), neutralizing accidental miskeys and preventing corrupted card data from polluting the database.
 
-### 🔒 Concurrent State Mutation (Pessimistic Locking)
+### Concurrent State Mutation (Pessimistic Locking)
 When simulating chaotic network environments, multiple debits might hit the same wallet simultaneously. oPayque handles this without distributed deadlocks:
 * **Row-Level Write Locks:** Before a ledger entry is processed, the `AccountService` drops a strict pessimistic write lock (`SELECT ... FOR UPDATE`) on the specific PostgreSQL account row.
 * **Optimistic Retry Backoff:** To absorb extreme transient contention spikes, the persistence layer is wrapped in a Spring Retry mechanism (`@Retryable`). It automatically utilizes exponential backoff to handle up to 12 collision attempts, seamlessly queuing 50+ concurrent threads without dropping a single connection.
 
-### 🌍 Multi-Currency Sub-Wallets & ISO 20022 Compliance
+### Multi-Currency Sub-Wallets & ISO 20022 Compliance
 The API acts as a global territorial gateway, allowing users to provision specific sub-wallets dynamically.
 * **The 1:1 Jurisdictional Rule:** A user is strictly limited to one active wallet per supported ISO 4217 currency (e.g., EUR, GBP) to prevent database sprawl.
 * **Strict IBAN Filtering:** The ecosystem is hard-locked to exactly 12 specific IBAN jurisdictions (managed via `IbanMetadata`). Any attempt to provision a wallet or execute a transfer outside these legally permitted bounds is rejected at the security perimeter. 
 * **Standardized Messaging:** Internal entity namings and JSON payloads (`IBAN`, `BIC`, `amount`, `currency`) are strictly aligned with ISO 20022 global financial messaging standards, ensuring seamless future integrations with real-world banking rails.
 * **Synchronous Simplicity:** External cross-currency exchange rates are fetched synchronously using the modern `RestClient` rather than the heavier `WebClient`, optimizing the execution footprint for blocking operations within the `@Transactional` boundary.
 
+<br>
+
+<p align="center">
+
+<img width="1377" height="140" alt="oPayque Supported Currencies" src="https://github.com/user-attachments/assets/f3c0c5ec-2299-4377-8944-c54f85fbf7b7" />
+
+</p>
+
+<p align="center"><em>Figure - oPayque Bank Supported currencies</em>
+
+<br>
+
+<div align="center">
+
+| Code | Currency (full name) | Country / Primary issuer |
+|------|----------------------|---------------------------|
+| EUR  | Euro | Eurozone (e.g., Germany, France, Italy, Spain, Netherlands, Belgium, etc.) |
+| GBP  | British Pound Sterling | United Kingdom |
+| CHF  | Swiss Franc | Switzerland (and Liechtenstein) |
+| PLN  | Polish Złoty | Poland |
+| NOK  | Norwegian Krone | Norway |
+| DKK  | Danish Krone | Denmark (including Greenland & the Faroe Islands) |
+| SEK  | Swedish Krona | Sweden |
+| CZK  | Czech Koruna | Czech Republic |
+| HUF  | Hungarian Forint | Hungary |
+| RON  | Romanian Leu | Romania |
+
+</div>
+
+
 ## Epic 3: Transaction & Transfer Gateway (The ACID Engine)
 
 Peer-to-Peer (P2P) fund transfers are the most critical operations in a financial system, susceptible to race conditions, network partition retries, and authorization bypass attacks. The oPayque `transactions` domain is engineered to handle these edge cases with absolute, mathematically proven atomicity.
 
-### 🛡️ The BOLA Shield & Context Resolution
+### The BOLA Shield & Context Resolution
 Broken Object Level Authorization (BOLA) attacks frequently target transfer endpoints by manipulating the `senderId` in JSON payloads. oPayque neutralizes this fundamentally at the `TransferController` API Gateway:
 * **Payload Ignorance:** The API entirely ignores identity claims in the request body. Instead, it extracts the sender's email cryptographically from the validated Spring Security JWT Principal.
 * **Strict Wallet Resolution:** Using the `AccountService`, the engine cross-references the authenticated email with the requested ISO 4217 currency, securely returning the internal UUID of the wallet only if the user holds authorized ownership of that specific jurisdictional account.
 
-### 🔌 Distributed Idempotency (At-Least-Once Safety)
+### Distributed Idempotency (At-Least-Once Safety)
 In mobile environments, dropped connections often result in clients retrying the same payment request. Without guardrails, this causes double-charging. 
 * **Redis `SETNX` Locks:** The gateway strictly requires an `Idempotency-Key` HTTP header. The `IdempotencyService` utilizes Redis atomic operations to place a distributed lock on this key with a 24-hour TTL.
 * **State Machine Guard:** If a second identical request hits the API while the first is processing, the system rejects it immediately. Once the transaction completes, the lock is updated to a `COMPLETED` state, permanently shielding the ledger from duplicate execution.
@@ -151,7 +181,7 @@ The actual money movement occurs within a heavily guarded `@Transactional` bound
 * **Corridor Validation:** P2P transfers are strictly isolated. The system dynamically queries the beneficiary's portfolio for a wallet that exactly matches the 1:1 requested currency. No live Forex conversion occurs here; if the beneficiary lacks the corresponding IBAN jurisdictional wallet, the transaction fails safely.
 * **Atomic Dual-Ledgering:** Upon successful validation, the engine persists two immutable `LedgerEntry` records (one `DEBIT` for the sender, one `CREDIT` for the receiver), binding them together with a shared `transferId` reference to ensure perfect, auditable double-entry accounting.
 
-### 🚦 API Abuse Protection (Fail-Fast Traffic Control)
+### API Abuse Protection (Fail-Fast Traffic Control)
 Before any database connections or locks are acquired, the `TransferController` routes the request through the `RateLimiterService`. This globally distributed Redis quota ensures that rapid, malicious brute-force attempts to drain an account result in a fast HTTP 429 response, protecting the core database from connection exhaustion.
 
 ## Epic 4: Virtual Card Ecosystem (The Crown Jewel)
@@ -160,7 +190,7 @@ The Virtual Card domain is the most heavily fortified segment of the oPayque API
 
 To achieve this, the application eschews standard database-level encryption in favor of a highly sophisticated, custom-built application-level cryptography engine: the `AttributeEncryptor`.
 
-### 🛡️ Military-Grade Cryptography: The `AttributeEncryptor`
+### Military-Grade Cryptography: The `AttributeEncryptor`
 Why did we build a custom crypto-engine instead of relying on AWS KMS or RDS TDE (Transparent Data Encryption)? Because TDE only protects data at rest (on the disk). If the database is compromised via SQL injection or unauthorized access, the engine decrypts the data transparently for the attacker. 
 
 oPayque implements **Envelope Encryption at the Application Layer**. The PostgreSQL database never sees the plaintext PAN, CVV, or Expiry Date; it only stores mathematically secure ciphertext.
@@ -175,7 +205,7 @@ The resulting ciphertext is a concatenated byte buffer, Base64-encoded for safe 
 \text{Payload} = \text{Version Byte [1]} \parallel \text{Random IV [12]} \parallel \text{Ciphertext} \parallel \text{Auth Tag [16]}
 ```
 
-### 🔄 Zero-Downtime Key Rotation
+### Zero-Downtime Key Rotation
 
 Financial compliance mandates periodic cryptographic key rotation. oPayque achieves zero-downtime rotation via the embedded **Version Byte**.
 
@@ -183,7 +213,7 @@ Financial compliance mandates periodic cryptographic key rotation. oPayque achie
 * The `activeVersion` designates the key used for all *new* encryption operations.
 * During decryption, the engine reads the first byte of the payload to dynamically select the correct historical key from the `keyStore`, allowing a seamless cryptoperiod overlap without breaking active cards.
 
-### 🔍 Deterministic Blind Indexing
+### Deterministic Blind Indexing
 
 A fundamental crypto-problem: *If the PAN is encrypted with a randomized IV every time, how do we check if a PAN already exists in the database without decrypting millions of rows?*
 
@@ -193,14 +223,14 @@ oPayque solves this with a **Blind Index** (`pan_fingerprint`).
 * This produces a deterministic 64-character hexadecimal fingerprint.
 * The database executes $O(1)$ lookups against the `uk_virtual_card_pan_fingerprint` constraint, achieving perfect searchability without ever exposing the reversible PAN.
 
-### ⚡ $O(1)$ Redis Spend Adjudication
+### $O(1)$ Redis Spend Adjudication
 
 To authorize merchant card swipes in milliseconds, the `CardLimitService` acts as the "Ledger-Side Limit-Control Chain".
 
 * **Atomic Lua Scripts:** Rather than fetching a balance, checking it, and updating it (which causes race conditions), oPayque pushes a custom Lua script (`LUA_LIMIT_CHECK`) directly into Redis. Redis evaluates the entire Read-Compare-Increment-Expire operation as a single, indivisible atomic unit.
 * **Sliding TTLs:** The script tracks spends against a key formatted as `spend:{cardId}:{yyyy-MM}` with a 32-day sliding TTL (`KEY_TTL_DAYS = 32`). This mathematically guarantees that monthly limits automatically reset on the 1st of every month, eliminating the need for fragile background batch jobs.
 
-### ⚖️ Saga-Lite Compensating Transactions
+### Saga-Lite Compensating Transactions
 
 The transaction engine follows a strict "Spend first, record second" orchestration.
 
@@ -208,7 +238,7 @@ The transaction engine follows a strict "Spend first, record second" orchestrati
 2. The system attempts to acquire the pessimistic database lock and execute the ACID ledger entry.
 3. **The "Zombie" Defense:** If the database write fails (e.g., connection drop, deadlock), the `CardTransactionService` catches the failure and fires `cardLimitService.rollbackSpend`. This compensating transaction returns the funds to the Redis available limit, ensuring perfect consistency between the high-speed cache and the persistent ledger.
 
-### 💱 Cross-Currency Orchestration & Resilience
+### Cross-Currency Orchestration & Resilience
 To support seamless international merchant payments, the virtual card engine relies on real-time Forex data. Integrating with third-party systems like the **ExchangeRate-API** introduces network unpredictability, which oPayque mitigates using a layered, fail-fast resilience strategy.
 
 * **Sub-Millisecond Caching:** The engine utilizes Spring's `@Cacheable` abstraction (backed by Redis) to store currency pairs (e.g., `EUR-GBP`). This eliminates external network hops for repeated currency pairs, delivering sub-millisecond latency for the transaction engine while strictly preserving external API quotas.
@@ -219,19 +249,19 @@ To support seamless international merchant payments, the virtual card engine rel
 ## Epic 5: The Observer & Administration (The View from the Top)
 A critical feature of any enterprise-grade application is its observability and lifecycle management. The `admin` and `statement` domains ensure that the oPayque API provides transparent, performant access to data for both users and system operators, alongside robust cloud-native telemetry for proactive monitoring. Beyond standard system health, the oPayque API provides granular visibility into its internal execution logic via real-time code instrumentation.
 
-### 📋 Transaction Statements & Streaming
+### Transaction Statements & Streaming
 To support heavy financial reporting, generating transaction statements needs to handle large volumes of data without causing memory issues.
 * **Forward-Only Slicing:** The `LedgerRepository` abandons the traditional Spring `Pageable` component for `Slice`. A standard `Page` implementation executes an expensive `COUNT()` query across the entire ledger to calculate total pages. Utilizing a `Slice` bypasses this, fetching only the requested chunk and a boolean indicating if a subsequent chunk exists, which significantly reduces the database workload during large CSV exports.
 * **Rapid Chronological Sorting:** The query relies heavily on the `idx_ledger_recorded_at` index, enabling PostgreSQL to fetch ranges of financial movements incredibly fast without relying on sequential table scans.
 
-### 🕵️ Cloud-Native Telemetry & Dashboards
+### Cloud-Native Telemetry & Dashboards
 The API deployment on AWS is monitored in real time using a custom-built telemetry stack.
 * **Prometheus Actuator:** The application surfaces key JVM metrics (like CPU usage) via the Spring Boot `/actuator/prometheus` endpoint.
 * **Secure Scrape Mechanism:** The `prometheus.yml` configuration is built to navigate the secure Let's Encrypt `HTTPS` endpoint, utilizing a dynamic `bearer_token_file` to authenticate its requests to the AWS EC2 instance.
 * **Bespoke Grafana Visualizations:** Instead of relying on generic templates, the `opayque-api-telemetry.json` provisions a dashboard directly tailored to the custom metrics.
 * **Micrometer `@Timed` Instrumentation:** Critical execution paths—such as the P2P transfer orchestrator and the AES-GCM encryption/decryption cycles—are annotated with `@Timed`. This directly pipes method-level invocation counts and latency distributions (e.g., $p95$, $p99$ response times) to Prometheus, allowing the Grafana dashboard to instantly visualize performance bottlenecks in the core logic.
 
-### 🛠️ The Administrator Domain
+### The Administrator Domain
 The `admin` boundary acts as a high-security enclave for system management tasks, locked firmly behind the `ROLE_ADMIN` guard.
 * **Account Lifecycle Governance:** Through `AccountService`, an administrator can update the status of accounts using a rigid state machine. A user may not freeze their own account; it is a privileged action. Furthermore, the system denies impossible state transitions (e.g., changing a `CLOSED` account back to `ACTIVE`).
 * **Liquidity Seeding:** To facilitate testing and system management, the `AdminWalletService` enables forced currency deposits directly into user ledgers.
@@ -243,7 +273,7 @@ The `admin` boundary acts as a high-security enclave for system management tasks
 
 The architecture of oPayque natively blends **Domain-Driven Design (DDD)** principles with **Cloud-Native Scalability**. By utilizing an isolated, multi-layered ecosystem design backed by robust distributed safeguards and extensive system verifications, oPayque functions effectively under severe concurrency loads.
 
-### 🌐 Cloud Architecture Ecosystem 
+### Cloud Architecture Ecosystem 
 
 ```mermaid
 architecture-beta
@@ -292,12 +322,12 @@ architecture-beta
     prom:L --> R:graf
 ```
 
-### 🧩 Domain-Driven Design (Bounded Contexts)
+### Domain-Driven Design (Bounded Contexts)
 The system rejects monolithic "Big Ball of Mud" scaling issues in favor of tightly decoupled boundaries:
 * **The Domains:** Logic is divided strictly into `identity`, `wallet`, `transactions`, `card`, and `admin` code bundles. Check `src/main/java/com/opayque/api` packages for structural segregation.
 * **ArchUnit Boundary Enforcement:** It’s easy to accidentally couple domains (e.g., the `wallet` layer directly fetching the `SecurityContext`). To prevent "domain leakage", oPayque enforces constraints mathematically via comprehensive `ArchUnit` testing routines. If the `wallet` layer attempts to directly poll the HTTP boundary logic rather than depending strictly on the `identity` or core service components, the build fundamentally fails `mvn verify`.
 
-### ⚖️ The Saga-Lite Pattern
+### The Saga-Lite Pattern
 Distributed databases and high-speed cache nodes run the real-world risk of partial failures where one database commits its result while another aborts.
 * OPayque implements a **Compensating Transaction Saga-Lite Strategy**.
 * When a merchant requests a swipe operation:
@@ -305,7 +335,7 @@ Distributed databases and high-speed cache nodes run the real-world risk of part
   2.  Then, it executes the strict PostgreSQL immutable debit entry execution.
   3.  If the PostgreSQL write fails (deadlock timeout, external network crash), a specialized catch block immediately rolls back the Redis operation and issues an HTTP 500 error, guaranteeing absolute synchronization and preventing "zombie authorizations" where limits are locked out despite the core ledger aborting.
 
-### 🔄 Software Delivery Lifecycle & TDD
+### Software Delivery Lifecycle & TDD
 This project was driven by a robust CI/CD integration focus.
 * **Agile Kanban Management:** Delivery was organized efficiently utilizing GitHub Projects to track sprint items over 5 distinct, high-impact Epics.
 * **Test Driven Development (TDD) Mastery:** Producing flawless banking math requires extensive proof logic.
@@ -903,7 +933,7 @@ erDiagram
 
     accounts ||--o{ virtual_cards : "issues (1-to-many)"
 ```
-<p align="center"><em>Figure - oPayque Business model Entity Relationship (ER) Diagram (excluding Partition tables and Liquibase Tables)</em></p>
+<p align="center"><em>Figure - <code>opayque_db</code> Entity Relationship (ER) Diagram (excluding Partition tables and Liquibase Tables)</em></p>
 
 > [!CAUTION]
 > **Why is the default USD in `currency` column of `ledger_entries` if oPayque is strictly an IBAN-only API?**
@@ -912,17 +942,17 @@ erDiagram
 > * **Business Logic Belongs in the Domain, Not the Database:** In strict Domain-Driven Design, business rules (like which 12 currencies are legally allowed) belong in the application's Domain layer, never hardcoded into the persistence layer. By enforcing the 12-jurisdiction rule at the `AccountService` and Controller layers, the API acts as an impenetrable shield.
 > * **The Unreachable Code Path:** Because the API strictly validates the currency and always explicitly passes the exact currency string to the `LedgerEntry` entity before the Hibernate/JPA save operation, the SQL INSERT statement never actually triggers the database-level fallback. The PostgreSQL `DEFAULT 'USD'` is practically unreachable via the API. Modifying historical, immutable Liquibase changesets just to remove an unreached default is an anti-pattern; we respect the append-only nature of database migrations.
 
-### 🗄️ Relational Foundations & Immutability
+### Relational Foundations & Immutability
 * **UUIDv4 Primary Keys:** All entities utilize 128-bit UUIDs rather than predictable sequential integers. This fundamentally prevents enumeration attacks (Insecure Direct Object References - IDOR) and guarantees collision-free identity generation across distributed database nodes.
 * **The Soft-Delete Paradigm:** To comply with strict banking data retention regulations, the `users` table utilizes a `deleted_at` timestamp. Identities are never hard-deleted via `SQL DELETE`; they are logically tombstoned. This ensures the immutable audit trail of the `accounts` and `ledger_entries` tied to that user remains perfectly intact forever.
 * **Temporal Partitioning:** The `ledger_entries` table is natively partitioned using the `recorded_at` timestamp as part of its composite Primary Key. This optimizes heavy read operations, allowing PostgreSQL to perform lightning-fast, forward-only slicing during CSV statement exports without scanning the massive historical heap.
 
-### 🔒 Concurrency Control & State Protection
+### Concurrency Control & State Protection
 Financial systems collapse when concurrent network threads attempt to mutate the same balance simultaneously. oPayque mitigates this using a dual-locking strategy that leverages PostgreSQL's Multi-Version Concurrency Control (MVCC):
 * **Pessimistic Write Locking (Row-Level):** During P2P transfers and virtual card swipes, the `TransferService` executes a `SELECT ... FOR UPDATE` directly on the `accounts` table. This drops a strict, database-level pessimistic lock on the specific wallet row, mathematically serializing concurrent debit requests and completely eliminating the "lost update" anomaly that leads to double-spending.
 * **Optimistic Locking (`@Version`):** The `virtual_cards` entity utilizes a `version` `BIGINT` column. If two administrative threads attempt to alter a card's lifecycle status (e.g., freezing and unfreezing) simultaneously, the JPA provider evaluates the version hash. The second overlapping transaction is instantly rejected with an `ObjectOptimisticLockingFailureException`, preventing silent state overwrites.
 
-### 🔍 Cryptographic Storage & Deterministic Indexing
+### Cryptographic Storage & Deterministic Indexing
 * **Blind Indexing for PCI-DSS:** The `virtual_cards` table stores the `pan`, `cvv`, and `expiry_date` strictly as AES-GCM ciphertexts. To allow for rapid card lookups without decrypting the entire database into memory, the schema implements a `pan_fingerprint` (an HMAC-SHA256 hash) backed by a `UNIQUE` constraint (`UK`). This grants the system $O(1)$ searchability over highly sensitive, encrypted payload data.
 * **Covering Indexes:** High-frequency ledger aggregation queries are backed by targeted covering indexes. This forces PostgreSQL to calculate the zero-sum ledger balances entirely within the index memory space, bypassing expensive disk-level table fetches entirely.
 
@@ -932,6 +962,12 @@ Financial systems collapse when concurrent network threads attempt to mutate the
   <img width="1920" height="1080" alt="RDS Connection via SSH in Datagrip IDE" src="https://github.com/user-attachments/assets/1e829f3a-c9ce-46ea-8110-6e81b507f4cf" />
   <p align="center"><em>Figure - Successful connection to AWS RDS Postgres 15.15-R1 via Local SSH Tunnelling through AWS EC2 Instance (Bastion Host Setup, Database is private and remains dark to the outside world)</em></p>
   <br>
+
+  https://github.com/user-attachments/assets/0f985275-8129-42a2-b555-b42366f79444
+
+  <p align="center"><em>Attachment - <code>opayque_db</code> Database Exlporer view in DataGrip IDE Sidebar</em></p>
+  <br>
+
   <img width="1920" height="1080" alt="USERS table" src="https://github.com/user-attachments/assets/d6bc881f-5326-4ba5-8719-e016ff0c9958" />
   <p align="center"><em>Figure - <code>users</code> table data storing encrypted passwords (using BCrypt)</em></p>
   <br>
@@ -949,8 +985,9 @@ Financial systems collapse when concurrent network threads attempt to mutate the
   
   https://github.com/user-attachments/assets/633d8f15-02b4-4216-bdcf-8bcef4d464d5
   
-  <p align="center"><em>Attachment - <code>virtual_cards</code> table data (pan, cvv, expiry_date fields are all encrypted by AES-GCM <code>AttributeEncryptor</code></em></p>
+  <p align="center"><em>Attachment - <code>virtual_cards</code> table data (pan, cvv, expiry_date fields are all encrypted by AES-GCM <code>AttributeEncryptor</code>)</em></p>
   <br>
+  
   <p align="center">
     
   <img width="400" height="800" alt="opayque_db full ER" src="https://github.com/user-attachments/assets/8fab72e6-c1f8-4a72-a7b5-67314b796a96" />
@@ -965,7 +1002,7 @@ Financial systems collapse when concurrent network threads attempt to mutate the
 
 Financial APIs cannot rely solely on perimeter firewalls. oPayque assumes the network is already hostile and implements a **Zero-Trust, Defense-in-Depth** architecture. Every layer—from the HTTP gateway to the physical disk—is fortified against OWASP Top 10 vulnerabilities, unauthorized enumeration, and brute-force exhaustion.
 
-### 🛡️ The Crown Jewel: `AttributeEncryptor` & Blind Indexing
+### The Crown Jewel: `AttributeEncryptor` & Blind Indexing
 To achieve strict alignment with PCI-DSS Requirement 3 (Protect Stored Cardholder Data), the application bypasses standard database-level Transparent Data Encryption (TDE) in favor of a bespoke application-layer cryptography engine. 
 
 The database never sees the plaintext Primary Account Number (PAN) or CVV or Expiry Date.
@@ -1007,7 +1044,7 @@ https://github.com/user-attachments/assets/2b5c8650-7905-42e5-9218-4536f8c8d4fc
 
 <p align="center"><em>Attachment - AES-GCM Encrypted <code>pan</code>, <code>cvv</code>, <code>expiry_date</code> and HMAC-SHA256 hashed <code>pan_fingerprint</code> stored in <code>virtual_cards</code> table of <code>opayque_db</code></em></p>
 
-### 🕵️ Regex-Powered PII Masking (`PiiLoggingConverter`)
+### Regex-Powered PII Masking (`PiiLoggingConverter`)
 
 Application logs are a notorious vector for Personally Identifiable Information (PII) leakage. To comply with GDPR and internal security policies, oPayque intercepts its telemetry prior to standard output.
 
@@ -1050,7 +1087,7 @@ public String convert(ILoggingEvent event) {
 
 This guarantees that while system operators can trace transactional flow and debug routing errors, they can never extract complete user identities from persistent log storage.
 
-### 🚦 Distributed Traffic Control (`RateLimiterService`)
+### Distributed Traffic Control (`RateLimiterService`)
 
 To prevent API abuse, credential stuffing, and ledger exhaustion, the API Gateway enforces globally distributed, fail-fast quotas using Redis.
 
@@ -1075,7 +1112,7 @@ public void checkLimit(String identifier, String action, int maxRequests) {
 }
 ```
 
-### 🛑 Fail-Closed Architecture
+### Fail-Closed Architecture
 
 Security systems are defined by how they fail. oPayque operates on a strict **Fail-Closed** paradigm for internal operations:
 
@@ -1111,7 +1148,7 @@ The oPayque API is fortified by a rigorous, zero-compromise testing methodology 
 <p align="center"><em>Figure - 100% Code coverage across all domains</em>
 
 
-### 💣 Contention & Concurrency (The "Black Friday" Suite)
+### Contention & Concurrency (The "Black Friday" Suite)
 Standard unit tests cannot prove thread safety. The `CardTransactionContentionStressTest` unleashes a "Black Friday" anomaly: 1000 concurrent threads attempting to swipe the exact same virtual card simultaneously. 
 
 To guarantee perfect concurrency verification, the test utilizes a `CountDownLatch` to hold all 1000 threads at the gate, firing them at the exact same millisecond to intentionally induce database deadlocks and race conditions.
@@ -1140,7 +1177,7 @@ latch.countDown(); // FIRE ALL 1000 THREADS SIMULTANEOUSLY
 
 The test mathematically proves that the PostgreSQL pessimistic row-level lock (`SELECT ... FOR UPDATE`) perfectly serializes the traffic, resulting in exactly one accurate balance state without a single phantom read or double-spend.
 
-### 🌪️ Chaos Engineering & Fault Injection
+### Chaos Engineering & Fault Injection
 
 The `CardTransactionChaosStressTest` introduces deliberate system sabotage to verify the ACID rollback integrity of the compensating transactions. In the "Zombie Transaction" scenario, the test utilizes Mockito's `doThrow` to simulate a catastrophic PostgreSQL crash immediately *after* the Redis $O(1)$ spend limit has been successfully incremented.
 
@@ -1154,7 +1191,7 @@ doThrow(new RuntimeException("Simulated Database Gridlock"))
 
 The assertion verifies that the catch-block successfully fires a compensating rollback to Redis, restoring the accumulator and preventing a "zombie" limit lock where funds are held hostage by a failed database commit.
 
-### 📉 Resource Exhaustion & Pool Starvation
+### Resource Exhaustion & Pool Starvation
 
 To observe how the API degrades under a DDoS attack or botnet traffic, the `CardTransactionExhaustionStressTest` deliberately constricts the HikariCP database connection pool to just 10 connections while blasting it with 1000 concurrent requests.
 
@@ -1168,7 +1205,7 @@ registry.add("spring.datasource.hikari.connection-timeout", () -> "5000");
 
 Rather than crashing the JVM or dropping the database cluster, the API safely queues the requests, rejects the overflow with connection timeouts, and—crucially—immediately recovers. A post-storm "Defibrillator Probe" guarantees the connection pool heals and resumes sub-second processing without manual intervention.
 
-### 🛡️ End-to-End Resilience & Circuit Breakers
+### End-to-End Resilience & Circuit Breakers
 
 External Forex APIs experience outages. The `OpayqueResilienceE2EJourneyTest` proves that the core engine survives them. The test configures WireMock to suddenly return an HTTP `503 Service Unavailable` for the `ExchangeRate-API`.
 
@@ -1181,7 +1218,7 @@ wireMockServer.stubFor(get(urlEqualTo("/" + MOCK_API_KEY + "/latest/EUR"))
 
 The test verifies that the Resilience4j Circuit Breaker trips open instantly, the Spring Actuator correctly reports the downstream health as `DOWN`, and the API seamlessly falls back to the Redis `@Cacheable` exchange rates, allowing the user payment journey to continue completely uninterrupted.
 
-### ⚡ High-Density Load Testing
+### High-Density Load Testing
 
 To ensure the immutable ledger architecture scales to real-world dimensions, the `DashboardLoadTest` seeds a single "Whale Account" with 10,000 deep ledger entries. It aggressively pre-heats the JIT compiler and HikariCP connection pool, then fires 100 simultaneous read requests to aggregate the running balance. The test asserts that the PostgreSQL covering index executes the dynamic zero-sum math in an average of under 200ms per request, entirely bypassing slow sequential disk scans.
 
@@ -1196,21 +1233,21 @@ The deployment architecture of oPayque abandons manual server configuration in f
 
 > 📄 **Infrastructure as Code:** The complete AWS environment is codified and reproducible. View the [CloudFormation Template](./infra/aws/opayque-prod-cloudformation-template.yaml) here.
 
-### ☁️ AWS Infrastructure Ecosystem (CloudFormation)
+### AWS Infrastructure Ecosystem (CloudFormation)
 The cloud environment is provisioned via the `opayque-prod-cloudformation-template.yaml`, establishing a rigid, isolated network topography.
 * **Compute (Amazon EC2):** The Spring Boot application runs on an Amazon Linux 2023 `t3.micro` instance, attached to an ultra-fast `gp3` EBS volume (3000 IOPS). It utilizes an IAM Instance Profile (`opayque-ec2-ecr-role`) to securely pull images from the private registry without hardcoding AWS credentials.
 * **Relational Persistence (Amazon RDS):** The core ledger is housed in a PostgreSQL `15.15` engine running on a `db.t4g.micro` instance. It is shielded from the public internet, accessible exclusively by the EC2 Security Group via Port `5432`. Data at rest is secured via AWS KMS Encryption.
 * **Distributed Cache (Amazon ElastiCache):** A Redis OSS 7 cluster handles the distributed $O(1)$ Lua script limit evaluations, Idempotency locks, and token blocklists, running securely on Port `6379`.
 * **Network Security (VPC & Firewalls):** The `opayque-ec2-sg` Security Group operates on a strict whitelist paradigm. It permits inbound traffic solely on TCP Ports 80 (HTTP) and 443 (HTTPS) for public API consumers, and Port 22 for secure admin SSH. All internal database and cache ports are entirely closed off to the public internet.
 
-### 🛡️ The Edge Layer: NGINX & TLS/SSL Cryptography
+### The Edge Layer: NGINX & TLS/SSL Cryptography
 A secure banking API cannot expose its raw application server (Port 8080) directly to the web. oPayque utilizes an NGINX reverse proxy to intercept, encrypt, and route traffic.
 * **Domain Resolution:** The API is globally resolvable via a custom DuckDNS domain (`opayque-api.duckdns.org`), effectively mapping the dynamic EC2 public IP to a stable, canonical hostname.
 * **NGINX Reverse Proxy:** NGINX listens on Port 80/443, injecting critical headers (`X-Real-IP`, `X-Forwarded-For`) and secretly proxy-passing requests to the internal Dockerized Spring Boot engine on Port 8080.
 * **Bank-Grade TLS (Let's Encrypt):** Absolute cryptographic transit security is enforced via Certbot. The Let's Encrypt SSL certificate scrambles all incoming JSON payloads—including authentication credentials and Virtual Card PANs—before they traverse the public internet.
 * **Zero-Maintenance Renewals:** A `systemctl` background timer (`certbot-renew.timer`) automatically checks and renews the SSL certificates before their 90-day expiration, guaranteeing zero downtime and permanent encryption.
 
-### 🚀 CI/CD Pipeline & Ultra-Lean Containerization
+### CI/CD Pipeline & Ultra-Lean Containerization
 Code delivery is completely automated, bridging the gap between local development and cloud deployment without manual intervention.
 * **GitHub Actions (`main.yml`):** Every push to the main branch triggers an isolated CI runner. The pipeline executes the massive 662-test verification suite using Testcontainers. Only if the tests pass with 100% success does the pipeline proceed to the build phase.
 * **Multi-Stage Docker Build:** The `Dockerfile` leverages a multi-stage compilation strategy. Stage 1 utilizes a heavy JDK image to compile the source code and run Maven dependencies. Stage 2 strips away the compiler and OS bloat, copying only the compiled `.jar` into an ultra-lean **Alpine JRE 17** base image.
@@ -1223,10 +1260,16 @@ Code delivery is completely automated, bridging the gap between local developmen
   <summary><b>Proof of Cloud Deployment: EC2 SSH Access & Server Initialization</b></summary>
   <br>
   <img width="1920" height="1080" alt="EC2 SSH Setup SS 1" src="https://github.com/user-attachments/assets/6fcd39d3-ab72-4685-bbee-45732c756cc2" />
+
+  <p align="center"><em>Figure - <code>opayque-backend</code> Startup sequence on AWS EC2 Instance via SSH</em></p>
   <br><br>
   <img width="1920" height="1080" alt="EC2 SSH Setup SS 2" src="https://github.com/user-attachments/assets/74c31f61-e98f-4470-a9eb-d0fe3311de10" />
+
+  <p align="center"><em>Figure - <code>opayque-backend</code>  Startup sequence and Liquibase changesets processing</em></p>
   <br><br>
   <img width="1920" height="1080" alt="EC2 SSH Setup SS 3" src="https://github.com/user-attachments/assets/061a4119-2ab3-41b3-acd7-be5d0177cc8b" />
+
+  <p align="center"><em>Figure - <code>opayque-backend</code> Successful Startup Sequence and ADMIN User seeded successfully</em>
 </details>
 
 
@@ -1234,28 +1277,44 @@ Code delivery is completely automated, bridging the gap between local developmen
   <summary><b>Proof of Cloud Deployment: AWS Infrastructure Dashboards (EC2, RDS, ElastiCache, SGs & ECR)</b></summary>
   <br>
   <img width="1474" height="797" alt="ECR SS Final" src="https://github.com/user-attachments/assets/65121dd3-1611-4027-8e3e-48ea63cda4e5" />
+
+  <p align="center"><em>Figure - Image resting in AWS ECR <code>opayque-api</code> Repository</em></p>
   <br><br>
   <img width="1813" height="921" alt="EC2 SS Final" src="https://github.com/user-attachments/assets/a09fcd89-9675-4166-a509-f422821f250c" />
+
+  <p align="center"><em>Figure - AWS EC2 Instance <code>opayque-api-server</code> Live UP and Running</em></p>
   <br><br>
   <img width="1810" height="979" alt="EC2 SGs SS" src="https://github.com/user-attachments/assets/dbc729ac-2d18-4212-9809-907c93c74c9c" />
+
+  <p align="center"><em>Figure - AWS EC2 Security Groups Dashboard for <code>opayque-ec2-sg</code></em></p>
   <br><br>
   <img width="1812" height="983" alt="RDS SS FINAL" src="https://github.com/user-attachments/assets/8e67a913-e200-468c-94d2-9b704bf9680a" />
+
+  <p align="center"><em>Figure - AWS RDS (Postgres 15.15-R1) <code>opayque-prod-db</code> Database Dashboard</em></p>
   <br><br>
   <img width="1812" height="977" alt="ELASTICACHE SS FINAL" src="https://github.com/user-attachments/assets/032cf5fa-c4de-405c-a499-d723ee82f029" />
+
+  <p align="center"><em>Figure - AWS Elasticache (Redis OSS 7.1) <code>opayque-redis</code> Dashboard</em></p>
 </details>
 
 <details>
   <summary><b>Proof of Cloud Deployment: NGINX Reverse Proxy & Let's Encrypt SSL Configuration</b></summary>
   <br>
   <img width="1920" height="1080" alt="NGINX & CERTBOT SS" src="https://github.com/user-attachments/assets/cb04bfa7-bad0-4f21-8ffb-84d1ee915a71" />
+
+  <p align="center">Figure - Let's Encrypt CertBot SSL Certification for <code>opayque-api.duckdns.org</code> Success</p>
 </details>
 
 <details>
   <summary><b>Proof of Cloud Deployment: Postman E2E Smoke Tests (HTTPS & Actuator Validation)</b></summary>
   <br>
   <img width="1915" height="1080" alt="POSTMAN LOGIN SMOKE TEST SS" src="https://github.com/user-attachments/assets/bd23ec7c-63f8-4da1-9bb6-48dfb2561a36" />
+
+  <p align="center"><em>Figure - Login endpoint Smoke test (via Postman) on <code>https://opayque-api.duckdns.org</code></em></p>
   <br><br>
   <img width="1920" height="1080" alt="POSTMAN ACTUATOR SMOKE TEST" src="https://github.com/user-attachments/assets/0bd94597-25be-4558-8d84-aa6398a5316a" />
+
+  <p align="center"><em>Figure - Actuator endpoint Smoke test (via Postman) on <code>https://opayque-api.duckdns.org</code></em></p>
 </details>
 
 ---
@@ -1266,20 +1325,20 @@ A production-grade financial ledger cannot fly blind. The oPayque API implements
 
 > Grafana Dashboard Template: To replicate the exact observability visualizations locally or in your own cloud, import the pre-configured [Grafana Dashboard](./observability/grafana/opayque-api-telemetry.json) file directly into your Grafana instance.
 
-### 🩺 Deep Health Checks & Actuator
+### Deep Health Checks & Actuator
 Standard liveness probes only verify if the application process is running. oPayque extends Spring Boot Actuator to provide deep, component-level system diagnostics.
 * **`ExchangeRateHealthIndicator`:** Because cross-currency P2P transfers and virtual card swipes rely on live Forex data, the system implements a custom `HealthIndicator`. It actively probes the `ExchangeRate-API` to verify third-party availability. If the external provider experiences an outage, the Actuator instantly reflects a degraded status, allowing load balancers or circuit breakers to adapt before user transactions fail.
 
-### ⏱️ Granular Code Instrumentation (`@Timed`)
+### Granular Code Instrumentation (`@Timed`)
 To prevent performance regressions in critical execution paths, the application utilizes Micrometer to instrument the core business logic.
 * **Latency Distributions:** Highly sensitive methods—such as the AES-GCM encryption and decryption cycles within the `AttributeEncryptor` and the ACID execution boundaries in the `TransferService`—are strictly guarded using `@Timed` annotations.
 * **Percentile Tracking:** This generates precise histogram data directly from the JVM, allowing the system to track exact invocation counts, maximum execution times, and critical latency percentiles (p95, p99) to ensure cryptographic overhead never breaches sub-millisecond SLA thresholds.
 
-### 📡 The Prometheus Scrape Engine
+### The Prometheus Scrape Engine
 Metrics are aggregated and exposed via the `/actuator/prometheus` endpoint.
 * **Secure Polling:** A dedicated Prometheus instance periodically scrapes this endpoint over the public DuckDNS URL. To prevent unauthorized exposure of internal system metrics, the scrape job is secured via Let's Encrypt HTTPS and authenticated using a strict `bearer_token_file`.
 
-### 📊 Bespoke Grafana Dashboards
+### Bespoke Grafana Dashboards
 Raw time-series data is translated into actionable intelligence through a custom-engineered Grafana dashboard.
 * **`opayque-api-telemetry.json`:** Instead of relying on generic JVM templates, this custom JSON configuration maps directly to oPayque's unique infrastructure.
 * **Visual Insights:** It provides single-pane-of-glass visibility into HikariCP connection pool saturation (crucial for monitoring the database starvation scenarios tested during the Black Friday stress tests), Redis command latency, HTTP rate-limiting triggers, and the core transactional throughput of the P2P engine.
@@ -1313,7 +1372,7 @@ The oPayque API is built on a modern, high-performance, and enterprise-grade Jav
 | **Maven** | N/A | Primary build automation tool handling dependency management, plugin execution, and the application lifecycle. |
 | **Lombok** | N/A | Radically reduces boilerplate code by automatically generating getters, setters, and builders via annotations at compile-time. |
 
-### 🗄️ Data & Persistence
+### Data & Persistence
 | Technology / Dependency | Version | Purpose in oPayque |
 | :--- | :--- | :--- |
 | **PostgreSQL** | 15.15-R1 | Primary relational database for the immutable ACID ledger and virtual card storage. |
@@ -1323,14 +1382,14 @@ The oPayque API is built on a modern, high-performance, and enterprise-grade Jav
 | **Liquibase** | N/A | Database migration tool ensuring strict, version-controlled schema evolution and immutability. |
 | **Joda-Money** | N/A | Specialized library for exact, zero-truncation currency math, preventing floating-point rounding errors. |
 
-### 🛡️ Resilience & Cryptography
+### Resilience & Cryptography
 | Technology / Dependency | Version | Purpose in oPayque |
 | :--- | :--- | :--- |
 | **Resilience4j** | N/A | Circuit Breaker implementation protecting the core API from cascading third-party Forex failures. |
 | **Spring Retry** | N/A | Automatically retries transient execution failures (e.g., network drops) with customizable backoff policies. |
 | **Auth0 java-jwt** | N/A | Cryptographic signing and validation of stateless JSON Web Tokens for user identity. |
 
-### 🔬 Testing & Quality Assurance
+### Testing & Quality Assurance
 | Technology / Dependency | Version | Purpose in oPayque |
 | :--- | :--- | :--- |
 | **JUnit 5** | N/A | Primary testing framework for executing the 662-test verification suite. |
@@ -1343,7 +1402,7 @@ The oPayque API is built on a modern, high-performance, and enterprise-grade Jav
 | **H2 Database** | N/A | Lightweight, in-memory database utilized as a rapid-execution fallback during specific slice tests. |
 | **Checkstyle** | N/A | Static analysis tool executing strictly during the Maven build to enforce corporate coding standards and styling. |
 
-### 📊 Observability & Telemetry
+### Observability & Telemetry
 | Technology / Dependency | Version | Purpose in oPayque |
 | :--- | :--- | :--- |
 | **Micrometer** | N/A | Instruments the code with `@Timed` annotations to track method execution latency and percentiles. |
@@ -1351,7 +1410,7 @@ The oPayque API is built on a modern, high-performance, and enterprise-grade Jav
 | **Prometheus** | N/A | Time-series database engine that securely scrapes and aggregates JVM and transaction metrics. |
 | **Grafana** | N/A | Visualizes the Prometheus data into bespoke, single-pane-of-glass operational dashboards. |
 
-### ☁️ Cloud Infrastructure & Edge
+### Cloud Infrastructure & Edge
 | Technology / Dependency | Version | Purpose in oPayque |
 | :--- | :--- | :--- |
 | **Docker** | N/A | Containerization engine utilizing a multi-stage Alpine JRE build to yield a lean 138MB footprint. |
@@ -1363,7 +1422,7 @@ The oPayque API is built on a modern, high-performance, and enterprise-grade Jav
 | **DuckDNS** | N/A | Dynamic DNS provider mapping the AWS EC2 public IPv4 address to `opayque-api.duckdns.org`. |
 | **Certbot (Let's Encrypt)**| N/A | Cryptographic agent managing auto-renewing, bank-grade SSL/TLS certificates for HTTPS encryption. |
 
-### 🛠️ DevOps, CI/CD & Development Tooling
+### DevOps, CI/CD & Development Tooling
 | Technology / Dependency | Version | Purpose in oPayque |
 | :--- | :--- | :--- |
 | **GitHub Actions** | N/A | CI/CD automation engine executing the 662-test suite and deploying images to AWS ECR. |
@@ -1761,7 +1820,7 @@ This project was engineered as a high-density portfolio showcase to demonstrate 
 > * **Troubleshooting:** Assisting with debugging and infrastructure configuration resolution.
 
 ### 📬 Contact & Portfolio
-I am actively seeking backend engineering opportunities. If you are a recruiter, engineering manager, or developer interested in discussing distributed systems, cloud architecture, or the oPayque project, please reach out!
+I am actively seeking backend engineering opportunities. If you are a recruiter, engineering manager, or developer interested in discussing the oPayque project, please reach out!
 
 * **LinkedIn:** [linkedin.com/in/your-profile-here](https://linkedin.com/in/your-profile-here)
 * **Email:** [madavanbabu@gmail.com](mailto:madavanbabu@gmail.com)
