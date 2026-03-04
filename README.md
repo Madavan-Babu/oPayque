@@ -45,7 +45,7 @@ Currently deployed live on **AWS EC2**, sitting behind an **NGINX reverse proxy*
 
 ---
 
-## I. Core Domains & Architecture (Epic Breakdown)
+# I. Core Domains & Architecture (Epic Breakdown)
 
 The oPayque API abandons standard layered architecture in favor of strict **Domain-Driven Design (DDD)**. The system is structurally partitioned into five highly cohesive, decoupled domains (Epics). This bounded-context approach ensures that the high-throughput Redis limit checks in the Card domain do not bleed into the pessimistic locking mechanisms of the Core Ledger. 
 
@@ -239,7 +239,7 @@ The `admin` boundary acts as a high-security enclave for system management tasks
 
 ---
 
-## II. Architectural Design & System Topography
+# II. Architectural Design & System Topography
 
 The architecture of oPayque natively blends **Domain-Driven Design (DDD)** principles with **Cloud-Native Scalability**. By utilizing an isolated, multi-layered ecosystem design backed by robust distributed safeguards and extensive system verifications, oPayque functions effectively under severe concurrency loads.
 
@@ -315,7 +315,7 @@ This project was driven by a robust CI/CD integration focus.
 
 ---
 
-## III. API Sequence Flows & Ecosystem Dynamics
+# III. API Sequence Flows & Ecosystem Dynamics
 
 The internal execution engine of oPayque natively blends extreme state-safety guardrails (Redis) with precise financial accounting boundaries (Joda-Money). The following trace sequences highlight exactly how oPayque securely governs state under heavy concurrent load. 
 
@@ -770,7 +770,7 @@ sequenceDiagram
 
 ---
 
-## IV. Database Schema & Data Integrity
+# IV. Database Schema & Data Integrity
 
 The persistence layer of oPayque is engineered for absolute financial truth. Operating on **PostgreSQL 15.15-R1**, the schema strictly enforces relational integrity, temporal partitioning, and extreme-concurrency locking mechanisms to prevent data anomalies, race conditions, and double-spend attacks.
 
@@ -903,6 +903,7 @@ erDiagram
 
     accounts ||--o{ virtual_cards : "issues (1-to-many)"
 ```
+<p align="center"><em>Figure - oPayque Business model Entity Relationship (ER) Diagram (excluding Partition tables and Liquibase Tables)</em></p>
 
 > [!CAUTION]
 > **Why is the default USD in `currency` column of `ledger_entries` if oPayque is strictly an IBAN-only API?**
@@ -925,9 +926,42 @@ Financial systems collapse when concurrent network threads attempt to mutate the
 * **Blind Indexing for PCI-DSS:** The `virtual_cards` table stores the `pan`, `cvv`, and `expiry_date` strictly as AES-GCM ciphertexts. To allow for rapid card lookups without decrypting the entire database into memory, the schema implements a `pan_fingerprint` (an HMAC-SHA256 hash) backed by a `UNIQUE` constraint (`UK`). This grants the system $O(1)$ searchability over highly sensitive, encrypted payload data.
 * **Covering Indexes:** High-frequency ledger aggregation queries are backed by targeted covering indexes. This forces PostgreSQL to calculate the zero-sum ledger balances entirely within the index memory space, bypassing expensive disk-level table fetches entirely.
 
+<details>
+  <summary><b>Proof of Database Persistence: Screenshots & Videos of all Tables and Complete Schema Diagram</b></summary>
+  <br>
+  <img width="1920" height="1080" alt="RDS Connection via SSH in Datagrip IDE" src="https://github.com/user-attachments/assets/1e829f3a-c9ce-46ea-8110-6e81b507f4cf" />
+  <p align="center"><em>Figure - Successful connection to AWS RDS Postgres 15.15-R1 via Local SSH Tunnelling through AWS EC2 Instance (Bastion Host Setup, Database is private and remains dark to the outside world)</em></p>
+  <br>
+  <img width="1920" height="1080" alt="USERS table" src="https://github.com/user-attachments/assets/d6bc881f-5326-4ba5-8719-e016ff0c9958" />
+  <p align="center"><em>Figure - <code>users</code> table data storing encrypted passwords (using BCrypt)</em></p>
+  <br>
+  <img width="1920" height="1080" alt="ACCOUNTS table" src="https://github.com/user-attachments/assets/e3f2d8c3-c80e-48cb-9cd4-76481fb62bfc" />
+  <p align="center"><em>Figure - <code>accounts</code> table data</em></p>
+  <br>
+  <img width="1919" height="404" alt="REFRESH TOKENS MASKED TABLE" src="https://github.com/user-attachments/assets/d7b4effc-cff3-498d-9883-e23cd8dea2e8" />
+  <p align="center"><em>Figure - <code>refresh_tokens</code> table data</em></p>
+  <br>
+  
+  https://github.com/user-attachments/assets/c811269b-0dbb-4b99-b352-b12f9cb3d288
+  
+  <p align="center"><em>Attachment - <code>ledger_entries</code> table data</em></p>
+  <br>
+  
+  https://github.com/user-attachments/assets/633d8f15-02b4-4216-bdcf-8bcef4d464d5
+  
+  <p align="center"><em>Attachment - <code>virtual_cards</code> table data (pan, cvv, expiry_date fields are all encrypted by AES-GCM <code>AttributeEncryptor</code></em></p>
+  <br>
+  <p align="center">
+    
+  <img width="400" height="800" alt="opayque_db full ER" src="https://github.com/user-attachments/assets/8fab72e6-c1f8-4a72-a7b5-67314b796a96" />
+  
+  </p>
+  <p align="center"><em>Attachment - Complete Database Schema for <code>opayque_db</code> (including partition tables and liquibase tables)</em>
+</details>
+
 ---
 
-## V. Bank-Grade Security & PCI-DSS Compliance
+# V. Bank-Grade Security & PCI-DSS Compliance
 
 Financial APIs cannot rely solely on perimeter firewalls. oPayque assumes the network is already hostile and implements a **Zero-Trust, Defense-in-Depth** architecture. Every layer—from the HTTP gateway to the physical disk—is fortified against OWASP Top 10 vulnerabilities, unauthorized enumeration, and brute-force exhaustion.
 
@@ -1050,7 +1084,7 @@ Security systems are defined by how they fail. oPayque operates on a strict **Fa
 
 ---
 
-## VI. Testing & Quality Assurance
+# VI. Testing & Quality Assurance
 
 The oPayque API is fortified by a rigorous, zero-compromise testing methodology consisting of **662 automated tests** that achieve **100% code coverage**. The suite abandons superficial mocks in favor of real-world infrastructure orchestration using **Testcontainers** (PostgreSQL 15 and Redis 7), **Rest Assured** for E2E boundary testing, **JQwik** for Property-Based Testing, **JUnit5** for Unit Testing, and **WireMock** for third-party fault simulation.
 
@@ -1156,7 +1190,7 @@ To ensure the immutable ledger architecture scales to real-world dimensions, the
 
 ---
 
-## VII. Cloud Infrastructure & CI/CD Pipeline
+# VII. Cloud Infrastructure & CI/CD Pipeline
 
 The deployment architecture of oPayque abandons manual server configuration in favor of strict, reproducible **Infrastructure as Code (IaC)** and automated GitOps pipelines. The entire cloud ecosystem is orchestrated on AWS, tightly secured within a custom Virtual Private Cloud (VPC), and exposed through a heavily fortified Edge Layer.
 
@@ -1226,7 +1260,7 @@ Code delivery is completely automated, bridging the gap between local developmen
 
 ---
 
-## VIII. Observability & Telemetry
+# VIII. Observability & Telemetry
 
 A production-grade financial ledger cannot fly blind. The oPayque API implements a comprehensive, cloud-native observability stack to monitor JVM heap pressure, cryptographic latency, and external integration health in real-time.
 
@@ -1262,7 +1296,7 @@ https://github.com/user-attachments/assets/a78c762b-39ac-492f-b9c8-0065ce144259
 
 ---
 
-## IX. Tech Stack & Dependencies
+# IX. Tech Stack & Dependencies
 
 The oPayque API is built on a modern, high-performance, and enterprise-grade Java ecosystem. Below is the comprehensive breakdown of the core technologies, libraries, infrastructure components, and DevOps tooling powering the application from local development to cloud production.
 
@@ -1342,7 +1376,7 @@ The oPayque API is built on a modern, high-performance, and enterprise-grade Jav
 
 ---
 
-## X. API Documentation & E2E Lifecycle Verification
+# X. API Documentation & E2E Lifecycle Verification
 
 The oPayque API contract is strictly standardized using **OpenAPI v3.0.3**. This specification serves as the definitive source of truth for all endpoint routing, HTTP semantics, strict JSON request/response schemas, and JWT Bearer authorization requirements.
 
@@ -1620,7 +1654,7 @@ The execution suite is divided into six distinct chronological groups:
 
 ---
 
-## XI. Local Setup & Deployment
+# XI. Local Setup & Deployment
 
 The oPayque API enforces strict, production-grade security defaults. It does not rely on hardcoded secrets or default administrator accounts. To run this architecture locally, you must explicitly inject the cryptographic keys and master credentials into the environment before the Spring context initializes.
 
@@ -1701,7 +1735,7 @@ A `200 OK` response returning your bearer `token` along with `refreshToken` conf
 
 ---
 
-## XII. License, Disclaimers & Contact
+# XII. License, Disclaimers & Contact
 
 ### License & Intellectual Property
 This core banking API is open-sourced under the **Apache License 2.0**. You are free to use, modify, and distribute the code for both commercial and private use under the conditions of the license. 
