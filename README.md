@@ -40,7 +40,7 @@ Currently deployed live on **AWS EC2**, sitting behind an **NGINX reverse proxy*
 * **Immutable Ledger & Double-Entry Bookkeeping:** Utilizes pessimistic row-level locking (`SELECT ... FOR UPDATE`) in PostgreSQL alongside `Joda-Money` to ensure zero-precision-loss and absolute protection against double-spend attacks.
 * **Military-Grade Cryptography:** Features a custom `AttributeEncryptor` leveraging **AES-GCM** encryption and **HMAC-SHA256** blind indexing to secure sensitive Virtual Card PANs and CVVs at rest.
 * **Distributed Resilience:** Orchestrates a robust Redis ecosystem to power an `IdempotencyService` (preventing replay attacks/duplicate charges), an atomic $O(1)$ `CardLimitService` using custom Lua scripts, and a global `RateLimiterService`.
-* **Strict Jurisdictional Compliance:** The engine strictly isolates transfers and transactions to **12 carefully regulated IBAN jurisdiction currencies** (defined natively via `IbanMetadata`), rejecting unsupported regional tenders at the security perimeter. 
+* **Strict Jurisdictional Compliance:** The engine strictly isolates transfers and transactions to **10 carefully regulated IBAN jurisdiction currencies** (defined natively via `IbanMetadata`), rejecting unsupported regional tenders at the security perimeter. 
 * **Cloud-Native Observability:** Instrumented with Micrometer and monitored in real-time via a custom **Prometheus & Grafana** telemetry stack, complete with PII-masked application logging.
 
 ---
@@ -126,7 +126,7 @@ When simulating chaotic network environments, multiple debits might hit the same
 ### Multi-Currency Sub-Wallets & ISO 20022 Compliance
 The API acts as a global territorial gateway, allowing users to provision specific sub-wallets dynamically.
 * **The 1:1 Jurisdictional Rule:** A user is strictly limited to one active wallet per supported ISO 4217 currency (e.g., EUR, GBP) to prevent database sprawl.
-* **Strict IBAN Filtering:** The ecosystem is hard-locked to exactly 12 specific IBAN jurisdictions (managed via `IbanMetadata`). Any attempt to provision a wallet or execute a transfer outside these legally permitted bounds is rejected at the security perimeter. 
+* **Strict IBAN Filtering:** The ecosystem is hard-locked to exactly 10 specific IBAN jurisdictions (managed via `IbanMetadata`). Any attempt to provision a wallet or execute a transfer outside these legally permitted bounds is rejected at the security perimeter. 
 * **Standardized Messaging:** Internal entity namings and JSON payloads (`IBAN`, `BIC`, `amount`, `currency`) are strictly aligned with ISO 20022 global financial messaging standards, ensuring seamless future integrations with real-world banking rails.
 * **Synchronous Simplicity:** External cross-currency exchange rates are fetched synchronously using the modern `RestClient` rather than the heavier `WebClient`, optimizing the execution footprint for blocking operations within the `@Transactional` boundary.
 
@@ -786,7 +786,7 @@ sequenceDiagram
 
 3. **BOLA Prevention & Jurisdiction Gate (Layer 4):**
     * **The BOLA Shield:** The system completely ignores any `senderId` passed in the JSON body. Instead, the `AccountService` resolves the sender's internal UUID strictly from the authenticated JWT context.
-    * Simultaneously, the requested currency is validated against the 12 permitted `IbanMetadata` jurisdictions.
+    * Simultaneously, the requested currency is validated against the 10 permitted `IbanMetadata` jurisdictions.
 
 4. **Distributed Transaction Lock (Layer 5):**
     * The `TransferService` initiates the transfer by calling the `IdempotencyService`. A Redis `SETNX` lock is acquired using the `Idempotency-Key` header with a `PENDING` status and a 24-hour TTL, permanently blocking network retry duplication.
@@ -939,7 +939,7 @@ erDiagram
 > **Why is the default USD in `currency` column of `ledger_entries` if oPayque is strictly an IBAN-only API?**
 >
 > * **The Agile Evolution (The Honest Truth):** During earlier sprints, before the strict `IbanMetadata` domain boundary was fully realized, the database required a `NOT NULL` default to satisfy early Liquibase migrations and initial unit tests. USD was a placeholder baseline.
-> * **Business Logic Belongs in the Domain, Not the Database:** In strict Domain-Driven Design, business rules (like which 12 currencies are legally allowed) belong in the application's Domain layer, never hardcoded into the persistence layer. By enforcing the 12-jurisdiction rule at the `AccountService` and Controller layers, the API acts as an impenetrable shield.
+> * **Business Logic Belongs in the Domain, Not the Database:** In strict Domain-Driven Design, business rules (like which 10 currencies are legally allowed) belong in the application's Domain layer, never hardcoded into the persistence layer. By enforcing the 10-jurisdiction rule at the `AccountService` and Controller layers, the API acts as an impenetrable shield.
 > * **The Unreachable Code Path:** Because the API strictly validates the currency and always explicitly passes the exact currency string to the `LedgerEntry` entity before the Hibernate/JPA save operation, the SQL INSERT statement never actually triggers the database-level fallback. The PostgreSQL `DEFAULT 'USD'` is practically unreachable via the API. Modifying historical, immutable Liquibase changesets just to remove an unreached default is an anti-pattern; we respect the append-only nature of database migrations.
 
 ### Relational Foundations & Immutability
