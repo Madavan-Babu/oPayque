@@ -4,7 +4,7 @@
 
   # oPayque Core Banking & Digital Wallet API
   
-  **A production-grade, highly concurrent financial ledger and virtual card issuance engine.**
+  **A production-grade highly secure, scalable, double-entry immutable financial ledger and virtual card issuance engine.**
   
   [![Java Support](https://img.shields.io/badge/Java-17-blue?logo=openjdk&logoColor=white)](https://adoptium.net/)
   [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.x-brightgreen?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
