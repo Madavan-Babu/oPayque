@@ -1359,7 +1359,7 @@ https://github.com/user-attachments/assets/a78c762b-39ac-492f-b9c8-0065ce144259
 
 The oPayque API is built on a modern, high-performance, and enterprise-grade Java ecosystem. Below is the comprehensive breakdown of the core technologies, libraries, infrastructure components, and DevOps tooling powering the application from local development to cloud production.
 
-### ⚙️ Core Framework, Web & Build
+### Core Framework, Web & Build
 | Technology / Dependency | Version | Purpose in oPayque |
 | :--- | :--- | :--- |
 | **Java** | 17 (LTS) | Core programming language, utilizing modern features like records and enhanced switch expressions. |
