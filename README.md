@@ -31,7 +31,7 @@
 
 The **oPayque Core Banking API** is a rigorously engineered backend system designed to simulate the complex operations of a modern digital bank. Built over two months of intensive development, this API moves beyond standard CRUD operations to tackle the hardest problems in distributed financial systems: **ACID-compliant money movement, concurrent state mutation, and PCI-DSS-aligned cryptographic security.**
 
-Currently deployed live on **AWS EC2**, sitting behind an **NGINX reverse proxy** with Let's Encrypt SSL termination, the API acts as the secure gateway to a heavily guarded financial ecosystem. 
+**Formerly deployed live** (terminated to mitigate cloud costs) on **AWS EC2**, sitting behind an **NGINX reverse proxy** with Let's Encrypt SSL termination, the API acts as the secure gateway to a heavily guarded financial ecosystem. 
 
 > 🛡️ **Zero-Compromise Engineering:** The entire system is governed by a suite of **662 automated tests**, including deep integration testing, E2E Testing, Property-Based Testing, ArchUnit boundary enforcement, and heavy concurrency stress-testing vector suites (exhaustion, chaos, and contention) achieving **100% code coverage**.
 
