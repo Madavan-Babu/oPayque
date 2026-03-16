@@ -1822,5 +1822,5 @@ This project was engineered as a high-density portfolio showcase to demonstrate 
 ### 📬 Contact & Portfolio
 I am actively seeking backend engineering opportunities. If you are a recruiter, engineering manager, or developer interested in discussing the oPayque project, please reach out!
 
-* **LinkedIn:** [Madavan Babu](www.linkedin.com/in/madavan-babu-b451862a4)
+* **LinkedIn:** [Madavan Babu](www.linkedin.com/in/madavan-babu)
 * **Email:** [madavanbabu@gmail.com](mailto:madavanbabu@gmail.com)
